@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
 
 import {
   Bookmark,
@@ -74,6 +75,7 @@ function formatIso(iso: string) {
 }
 
 export default function SqlLabPage() {
+  const navigate = useNavigate();
   const [databases] = useState(mockDatabases);
   const [selectedDb, setSelectedDb] = useState("analytics");
   const [selectedSchema, setSelectedSchema] = useState("public");
@@ -94,6 +96,69 @@ export default function SqlLabPage() {
     setToast(msg);
     window.setTimeout(() => setToast(null), 2200);
   };
+
+  // Deep-link from the standalone list pages: /sqllab?open=ID or ?history=ID
+  // uses sessionStorage so F5 keeps working even if query param is stripped by "View all"
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const openId = params.get("open");
+    const histId = params.get("history");
+    let opened = false;
+    if (openId) {
+      try {
+        const raw = sessionStorage.getItem("metric:openSavedQuery");
+        const sq: SavedQuery | null = raw
+          ? (JSON.parse(raw) as SavedQuery)
+          : (mockSavedQueries.find((s) => String(s.id) === openId) ?? null);
+        if (sq) {
+          const nt: QueryTab = {
+            id: Math.random().toString(36).slice(2, 8),
+            title: sq.name,
+            sql: sq.sql,
+            databaseId: sq.database,
+            schemaName: sq.schema,
+            limit: 100,
+          };
+          setTabs((p) => [...p, nt]);
+          setActiveId(nt.id);
+          showToast(`Opened "${sq.name}"`);
+          opened = true;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!opened && histId) {
+      try {
+        const raw = sessionStorage.getItem("metric:openHistoryEntry");
+        const h: QueryHistoryEntry | null = raw
+          ? (JSON.parse(raw) as QueryHistoryEntry)
+          : (mockHistory.find((x) => String(x.id) === histId) ?? null);
+        if (h) {
+          const nt: QueryTab = {
+            id: Math.random().toString(36).slice(2, 8),
+            title: `History #${h.id}`,
+            sql: h.sql,
+            databaseId: h.database,
+            schemaName: h.schema,
+            limit: 100,
+          };
+          setTabs((p) => [...p, nt]);
+          setActiveId(nt.id);
+          showToast(`Opened history #${h.id}`);
+          opened = true;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (opened) {
+      // clean the URL so a refresh doesn't re-add a duplicate tab
+      navigate("/sqllab", { replace: true });
+    }
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const db = databases.find((d) => d.id === selectedDb) ?? databases[0];
   const schema = db.schemas.find((s) => s.name === selectedSchema) ??
@@ -797,6 +862,17 @@ export default function SqlLabPage() {
 
               {bottomTab === "history" && (
                 <div className="overflow-auto">
+                  <div className="flex items-center justify-between px-3 py-2">
+                    <p className="text-muted-foreground text-xs">
+                      Recent runs — newest first (full history is paginated)
+                    </p>
+                    <Link
+                      to="/sqllab/history"
+                      className="text-foreground inline-flex items-center gap-1 text-xs font-medium underline-offset-2 hover:underline"
+                    >
+                      View all →
+                    </Link>
+                  </div>
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-muted/40 text-muted-foreground border-y text-left">
@@ -809,7 +885,7 @@ export default function SqlLabPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-border divide-y">
-                      {history.map((h) => (
+                      {history.slice(0, 5).map((h) => (
                         <tr key={h.id} className="hover:bg-muted/40">
                           <td className="text-muted-foreground px-3 py-2 whitespace-nowrap">
                             <span className="inline-flex items-center gap-1">
@@ -836,13 +912,42 @@ export default function SqlLabPage() {
                           </td>
                         </tr>
                       ))}
+                      {history.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={6}
+                            className="text-muted-foreground px-4 py-8 text-center text-xs"
+                          >
+                            No history yet — run a query to see it here.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
+                  {history.length > 5 && (
+                    <div className="border-border border-t px-3 py-2 text-center">
+                      <Link
+                        to="/sqllab/history"
+                        className="text-xs font-medium underline-offset-2 hover:underline"
+                      >
+                        View all {history.length} runs →
+                      </Link>
+                    </div>
+                  )}
                 </div>
               )}
 
               {bottomTab === "saved" && (
                 <div className="overflow-auto">
+                  <div className="flex items-center justify-between px-3 py-2">
+                    <p className="text-muted-foreground text-xs">Recent saves — newest first</p>
+                    <Link
+                      to="/savedquerylist/list"
+                      className="text-foreground inline-flex items-center gap-1 text-xs font-medium underline-offset-2 hover:underline"
+                    >
+                      View all →
+                    </Link>
+                  </div>
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-muted/40 text-muted-foreground border-y text-left">
@@ -854,7 +959,7 @@ export default function SqlLabPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-border divide-y">
-                      {savedQueries.map((sq) => (
+                      {savedQueries.slice(0, 5).map((sq) => (
                         <tr key={sq.id} className="hover:bg-muted/40">
                           <td className="px-3 py-2">
                             <button
@@ -901,6 +1006,16 @@ export default function SqlLabPage() {
                       )}
                     </tbody>
                   </table>
+                  {savedQueries.length > 5 && (
+                    <div className="border-border border-t px-3 py-2 text-center">
+                      <Link
+                        to="/savedquerylist/list"
+                        className="text-xs font-medium underline-offset-2 hover:underline"
+                      >
+                        View all {savedQueries.length} queries →
+                      </Link>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
