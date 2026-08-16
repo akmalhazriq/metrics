@@ -55,6 +55,8 @@ function isActive(pathname: string, href: string) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
+  const activeLabel =
+    NAV.flatMap((g) => g.items).find((it) => isActive(pathname, it.href))?.label ?? "Dashboards";
 
   return (
     <div className="bg-background text-foreground min-h-screen">
@@ -74,7 +76,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <span className="bg-border h-3 w-px" />
           <span className="px-2">Workspace</span>
           <span className="text-border">/</span>
-          <span className="text-foreground font-medium">Dashboards</span>
+          <span className="text-foreground font-medium">{activeLabel}</span>
         </div>
 
         <div className="ml-auto flex items-center gap-1">
