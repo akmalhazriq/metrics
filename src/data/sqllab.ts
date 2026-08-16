@@ -1,193 +1,26 @@
 /**
  * Mock SQL Lab data — PLACEHOLDER DATA LAYER
  *
- * In-memory database/schema/table tree + seeded result sets.
- * Served client-side for this phase; swap for real connection metadata +
- * query execution (e.g. via `routes/api/sqllab/execute.post.ts`) when a
- * DB gateway exists. The types in `src/types/sqllab.ts` are the contract.
+ * Query results + history are owned here. The database/schema/table tree is
+ * the canonical `seedDatabases` from `src/data/databases.ts` — re-exported as
+ * `mockDatabases` so SQL Lab and the Database List share one source of truth
+ * (see decision note in `src/data/databases.ts`).
+ * Swap for real execution + metadata when a DB gateway exists.
  */
 import type { QueryHistoryEntry, SavedQuery, SqlDatabase } from "@/types/sqllab";
+import { seedDatabases } from "./databases";
 
-export const mockDatabases: SqlDatabase[] = [
-  {
-    id: "analytics",
-    name: "analytics",
-    type: "Postgres",
-    schemas: [
-      {
-        name: "public",
-        tables: [
-          {
-            name: "orders",
-            rowCount: 48291,
-            columns: [
-              { name: "order_id", type: "integer" },
-              { name: "customer_id", type: "integer" },
-              { name: "amount", type: "numeric" },
-              { name: "status", type: "varchar" },
-              { name: "created_at", type: "timestamp" },
-            ],
-          },
-          {
-            name: "customers",
-            rowCount: 12043,
-            columns: [
-              { name: "customer_id", type: "integer" },
-              { name: "email", type: "varchar" },
-              { name: "region", type: "varchar" },
-              { name: "created_at", type: "timestamp" },
-            ],
-          },
-          {
-            name: "board_metrics",
-            rowCount: 892,
-            columns: [
-              { name: "metric", type: "varchar" },
-              { name: "value", type: "numeric" },
-              { name: "period", type: "date" },
-            ],
-          },
-        ],
-      },
-      {
-        name: "product",
-        tables: [
-          {
-            name: "events",
-            rowCount: 102394,
-            columns: [
-              { name: "event_id", type: "uuid" },
-              { name: "user_id", type: "integer" },
-              { name: "event_name", type: "varchar" },
-              { name: "ts", type: "timestamp" },
-            ],
-          },
-          {
-            name: "funnel_sessions",
-            rowCount: 43120,
-            columns: [
-              { name: "session_id", type: "uuid" },
-              { name: "step", type: "varchar" },
-              { name: "converted", type: "boolean" },
-            ],
-          },
-          {
-            name: "sessions",
-            rowCount: 88321,
-            columns: [
-              { name: "session_id", type: "uuid" },
-              { name: "user_id", type: "integer" },
-              { name: "duration_sec", type: "integer" },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: "warehouse",
-    name: "warehouse",
-    type: "BigQuery",
-    schemas: [
-      {
-        name: "ops",
-        tables: [
-          {
-            name: "shipments",
-            rowCount: 65320,
-            columns: [
-              { name: "shipment_id", type: "string" },
-              { name: "origin", type: "string" },
-              { name: "latency_hours", type: "float" },
-              { name: "cost", type: "float" },
-            ],
-          },
-        ],
-      },
-      {
-        name: "support",
-        tables: [
-          {
-            name: "tickets",
-            rowCount: 22100,
-            columns: [
-              { name: "ticket_id", type: "integer" },
-              { name: "priority", type: "varchar" },
-              { name: "status", type: "varchar" },
-              { name: "created_at", type: "timestamp" },
-            ],
-          },
-        ],
-      },
-      {
-        name: "infra",
-        tables: [
-          {
-            name: "aws_billing",
-            rowCount: 5400,
-            columns: [
-              { name: "service", type: "varchar" },
-              { name: "cost", type: "numeric" },
-              { name: "month", type: "date" },
-            ],
-          },
-          {
-            name: "incidents",
-            rowCount: 890,
-            columns: [
-              { name: "incident_id", type: "integer" },
-              { name: "severity", type: "varchar" },
-              { name: "resolved", type: "boolean" },
-            ],
-          },
-        ],
-      },
-      {
-        name: "finance",
-        tables: [
-          {
-            name: "payouts",
-            rowCount: 3100,
-            columns: [
-              { name: "payout_id", type: "integer" },
-              { name: "partner_id", type: "integer" },
-              { name: "amount", type: "numeric" },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: "reporting",
-    name: "reporting",
-    type: "Snowflake",
-    schemas: [
-      {
-        name: "marketing",
-        tables: [
-          {
-            name: "ad_spend",
-            rowCount: 12000,
-            columns: [
-              { name: "channel", type: "varchar" },
-              { name: "spend", type: "numeric" },
-              { name: "roas", type: "float" },
-            ],
-          },
-          {
-            name: "ltv",
-            rowCount: 3400,
-            columns: [
-              { name: "cohort", type: "varchar" },
-              { name: "ltv", type: "numeric" },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-];
+/**
+ * Derived from the canonical `seedDatabases` — single source, projected to
+ * the lighter `SqlDatabase` shape that SQL Lab's selector needs. This keeps
+ * the Database List and SQL Lab from forking into two inconsistent seeds.
+ */
+export const mockDatabases: SqlDatabase[] = seedDatabases.map((db) => ({
+  id: db.id,
+  name: db.name,
+  type: db.backend as SqlDatabase["type"],
+  schemas: db.schemas,
+}));
 
 export type MockResultSet = { columns: string[]; rows: Record<string, string | number>[] };
 
