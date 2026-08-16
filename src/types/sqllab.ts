@@ -12,7 +12,15 @@ export type SqlSchema = { name: string; tables: SqlTable[] };
 export type SqlDatabase = {
   id: string;
   name: string;
-  type: "Postgres" | "BigQuery" | "Snowflake" | "MySQL";
+  type:
+    | "Postgres"
+    | "BigQuery"
+    | "Snowflake"
+    | "MySQL"
+    | "Presto"
+    | "Redshift"
+    | "Trino"
+    | "SQLite";
   schemas: SqlSchema[];
 };
 
