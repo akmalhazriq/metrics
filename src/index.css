@@ -47,6 +47,12 @@
   --info-foreground: oklch(0.985 0 0);
   --favorite: oklch(0.82 0.14 85);
   --favorite-foreground: oklch(0.205 0 0);
+  /* Code / editor — distinct from table rows for SQL Lab */
+  --editor: oklch(0.985 0 0);
+  --editor-foreground: oklch(0.145 0 0);
+  --editor-border: oklch(0.9 0 0);
+  --editor-gutter: oklch(0.97 0 0);
+  --editor-gutter-foreground: oklch(0.556 0 0);
 }
 
 .dark {
@@ -90,6 +96,11 @@
   --info-foreground: oklch(0.145 0 0);
   --favorite: oklch(0.78 0.13 85);
   --favorite-foreground: oklch(0.145 0 0);
+  --editor: oklch(0.18 0 0);
+  --editor-foreground: oklch(0.985 0 0);
+  --editor-border: oklch(0.27 0 0);
+  --editor-gutter: oklch(0.22 0 0);
+  --editor-gutter-foreground: oklch(0.6 0 0);
 }
 
 @theme inline {
@@ -137,6 +148,11 @@
   --color-info-foreground: var(--info-foreground);
   --color-favorite: var(--favorite);
   --color-favorite-foreground: var(--favorite-foreground);
+  --color-editor: var(--editor);
+  --color-editor-foreground: var(--editor-foreground);
+  --color-editor-border: var(--editor-border);
+  --color-editor-gutter: var(--editor-gutter);
+  --color-editor-gutter-foreground: var(--editor-gutter-foreground);
 }
 
 @layer base {
