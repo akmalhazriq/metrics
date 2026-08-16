@@ -10,6 +10,7 @@ import {
   Shield,
   Settings2,
   Table2,
+  Compass,
 } from "lucide-react";
 
 import { cn } from "@/utils";
@@ -27,6 +28,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { label: "Dashboards", href: "/dashboard", icon: LayoutDashboard },
       { label: "Charts", href: "/chart", icon: BarChart3 },
+      { label: "Explore", href: "/explore", icon: Compass },
       { label: "SQL Lab", href: "/sqllab", icon: FlaskConical },
     ],
   },

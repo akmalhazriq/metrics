@@ -47,6 +47,17 @@ export default defineConfig({
     }),
   ],
 
+  optimizeDeps: {
+    include: [
+      "@tanstack/charts",
+      "@tanstack/charts/react",
+      "@tanstack/charts/scales/band",
+      "@tanstack/charts/scales/linear",
+      "@tanstack/charts/scales/ordinal",
+      "@tanstack/charts/tooltip",
+    ],
+  },
+
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
