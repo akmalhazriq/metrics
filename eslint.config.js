@@ -21,6 +21,24 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       "@typescript-eslint/no-empty-object-type": "off",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    files: ["routes/**/*.{ts,tsx}", "server.ts", "configs/**/*.{ts,tsx}"],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.node,
+    },
+    rules: {
+      "@typescript-eslint/no-empty-object-type": "off",
+    },
+  },
+  {
+    files: ["src/components/ui/*.{ts,tsx}"],
+    rules: {
+      "react-refresh/only-export-components": "off",
     },
   },
 );

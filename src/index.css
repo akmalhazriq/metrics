@@ -20,7 +20,7 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.87 0 0);
@@ -38,6 +38,15 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.87 0 0);
+  /* Status / semantic — extends the monochrome base for list chrome */
+  --success: oklch(0.6 0.14 145);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.78 0.13 75);
+  --warning-foreground: oklch(0.205 0 0);
+  --info: oklch(0.58 0.12 245);
+  --info-foreground: oklch(0.985 0 0);
+  --favorite: oklch(0.82 0.14 85);
+  --favorite-foreground: oklch(0.205 0 0);
 }
 
 .dark {
@@ -73,6 +82,14 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(0.269 0 0);
   --sidebar-ring: oklch(0.439 0 0);
+  --success: oklch(0.62 0.13 145);
+  --success-foreground: oklch(0.145 0 0);
+  --warning: oklch(0.76 0.12 75);
+  --warning-foreground: oklch(0.145 0 0);
+  --info: oklch(0.62 0.12 245);
+  --info-foreground: oklch(0.145 0 0);
+  --favorite: oklch(0.78 0.13 85);
+  --favorite-foreground: oklch(0.145 0 0);
 }
 
 @theme inline {
@@ -112,6 +129,14 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-favorite: var(--favorite);
+  --color-favorite-foreground: var(--favorite-foreground);
 }
 
 @layer base {
