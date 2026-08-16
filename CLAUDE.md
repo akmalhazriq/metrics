@@ -415,3 +415,9 @@ This repo already made real design decisions instead of taking Tailwind defaults
 - The token system in `src/index.css` is extended consistently, not duplicated, across list pages, editors, dashboards, and AI surfaces.
 - `npm run lint` and `npm run build` pass cleanly.
 - No page, looked at cold, reads as a generic template — each one reflects a decision, not a default.
+
+---
+
+## Known gaps (Phase 1 — documented deferrals)
+
+- **Saved Queries / Query History as standalone routes** — spec requires `/savedquerylist/list/` (columns: name, database, schema, saved by, modified, description; search/filter; actions open/edit/delete/export) and `/sqllab/history/` (columns: time, user, database, schema, rows, status, SQL preview; search by user/database/time range/status/SQL; pagination) as real list pages with their own search/filter/pagination like Dashboard/Chart/Dataset. Currently implemented as tabs inside `/sqllab/` (`src/pages/sqllab/index.tsx`) with inline tables — sufficient for the SQL Lab workflow, not parity. Flagged 2026-08-16; needs dedicated `src/pages/savedquerylist/list/index.tsx` + `src/pages/sqllab/history/index.tsx` backed by `routes/api/saved-queries/**` + `routes/api/query-history/**` before Phase 1 is called done for this section.
