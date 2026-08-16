@@ -50,6 +50,12 @@ const NAV: { section: string; items: NavItem[] }[] = [
 
 function isActive(pathname: string, href: string) {
   if (href === "/dashboard") return pathname.startsWith("/dashboard");
+  if (href === "/uploads")
+    return (
+      pathname.startsWith("/uploads") ||
+      pathname.startsWith("/csvtodatabaseview") ||
+      pathname.startsWith("/exceltodatabaseview")
+    );
   return pathname.startsWith(href);
 }
 
