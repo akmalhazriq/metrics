@@ -26,8 +26,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { seedDatasets } from "@/data/datasets";
-import { seedDatabases } from "@/data/databases";
+import { fetchList } from "@/lib/api";
+import type { DatabaseConnection } from "@/types/database";
 import type { Dataset, DatasetColumn, DatasetMetric, DatasetType } from "@/types/dataset";
 
 type ApiResponse = { data: Dataset[]; total: number; page: number; pageSize: number };
@@ -59,24 +59,23 @@ const EDITOR_TABS: { id: EditorTab; label: string; icon: typeof Columns3 }[] = [
 
 function emptyDataset(): Dataset {
   const now = new Date().toISOString();
-  const db = seedDatabases[0];
   return {
     id: Date.now(),
     name: "",
     type: "physical",
-    databaseId: db.id,
-    databaseName: db.name,
-    backend: db.backend,
-    schema: db.schemas[0]?.name ?? "public",
-    table: db.schemas[0]?.tables[0]?.name ?? "orders",
-    source: `${db.name}.${db.schemas[0]?.name ?? "public"}.${db.schemas[0]?.tables[0]?.name ?? "orders"}`,
+    databaseId: "analytics",
+    databaseName: "Analytics",
+    backend: "Postgres",
+    schema: "public",
+    table: "orders",
+    source: "Analytics.public.orders",
     mainDatetimeColumn: null,
     columns: [{ name: "id", type: "INTEGER", groupable: true, filterable: true }],
     metrics: [],
-    createdBy: { id: 1, name: "Akmal Hazriq" },
-    modifiedBy: { id: 1, name: "Akmal Hazriq" },
+    createdBy: { id: 1, name: "Admin User" },
+    modifiedBy: { id: 1, name: "Admin User" },
     modified: now,
-    owners: [{ id: 1, name: "Akmal Hazriq" }],
+    owners: [{ id: 1, name: "Admin User" }],
     description: "",
     defaultEndpoint: "",
     timeGrain: "P1D",
@@ -106,14 +105,16 @@ export default function DatasetListPage() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
 
+  const [liveDbs, setLiveDbs] = useState<DatabaseConnection[]>([]);
   const [rows, setRows] = useState<Dataset[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [localRows, setLocalRows] = useState<Dataset[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [saving, setSaving] = useState(false);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorTab, setEditorTab] = useState<EditorTab>("settings");
@@ -143,6 +144,18 @@ export default function DatasetListPage() {
 
   useEffect(() => {
     let cancelled = false;
+    async function loadDbs() {
+      try {
+        const res = await fetchList<DatabaseConnection>("/api/databases", { page: 1, pageSize: 50 });
+        if (!cancelled) setLiveDbs(res.data);
+      } catch { if (!cancelled) setLiveDbs([]); }
+    }
+    void loadDbs();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     const params = new URLSearchParams();
     if (q) params.set("q", q);
@@ -158,53 +171,11 @@ export default function DatasetListPage() {
       .then((r) => r.json() as Promise<ApiResponse>)
       .then((res) => {
         if (cancelled) return;
-        let data = res.data;
-        if (localRows) {
-          const map = new Map(localRows.map((d) => [d.id, d]));
-          data = data.map((d) => map.get(d.id) ?? d);
-          const ids = new Set(localRows.map((d) => d.id));
-          data = data.filter((d) => ids.has(d.id));
-          const serverIds = new Set(data.map((d) => d.id));
-          const extras = localRows.filter(
-            (d) => !serverIds.has(d.id) && (!q || d.name.toLowerCase().includes(q.toLowerCase())),
-          );
-          if (extras.length)
-            data = [...extras.slice(0, pageSize - data.length), ...data].slice(0, pageSize);
-        }
-        setRows(data);
-        setTotal(
-          localRows
-            ? localRows.filter(
-                (d) =>
-                  (!q || d.name.toLowerCase().includes(q.toLowerCase())) &&
-                  (databaseFilter === "all" || d.databaseId === databaseFilter) &&
-                  (typeFilter === "all" || d.type === typeFilter) &&
-                  (!owner ||
-                    d.owners.some((o) => o.name.toLowerCase().includes(owner.toLowerCase()))),
-              ).length
-            : res.total,
-        );
+        setRows(res.data);
+        setTotal(res.total);
       })
       .catch(() => {
-        if (!cancelled) {
-          let data = [...seedDatasets];
-          if (q) data = data.filter((d) => d.name.toLowerCase().includes(q.toLowerCase()));
-          if (databaseFilter !== "all") data = data.filter((d) => d.databaseId === databaseFilter);
-          if (typeFilter !== "all") data = data.filter((d) => d.type === typeFilter);
-          if (owner)
-            data = data.filter((d) =>
-              d.owners.some((o) => o.name.toLowerCase().includes(owner.toLowerCase())),
-            );
-          data.sort((a, b) => {
-            const dir = sortDir === "asc" ? 1 : -1;
-            if (sortBy === "name") return dir * a.name.localeCompare(b.name);
-            if (sortBy === "database") return dir * a.databaseName.localeCompare(b.databaseName);
-            return dir * a.modified.localeCompare(b.modified);
-          });
-          const totalFb = data.length;
-          setRows(data.slice((page - 1) * pageSize, page * pageSize));
-          setTotal(totalFb);
-        }
+        if (!cancelled) showToast("Could not load datasets");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -212,47 +183,67 @@ export default function DatasetListPage() {
     return () => {
       cancelled = true;
     };
-  }, [q, databaseFilter, typeFilter, owner, sortBy, sortDir, page, pageSize, localRows]);
+  }, [q, databaseFilter, typeFilter, owner, sortBy, sortDir, page, pageSize, reloadKey]);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
 
-  const handleDelete = (id: number) => {
-    setRows((prev) => prev.filter((d) => d.id !== id));
-    setLocalRows((prev) => {
-      const base = prev ?? seedDatasets;
-      return base.filter((d) => d.id !== id);
-    });
-    setSelected((prev) => {
-      const n = new Set(prev);
-      n.delete(id);
-      return n;
-    });
-    setTotal((t) => Math.max(0, t - 1));
-    showToast("Dataset deleted");
+  const handleDelete = async (id: number) => {
+    try {
+      const res = await fetch(`/api/datasets/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Delete failed (${res.status})`);
+      }
+      showToast("Dataset deleted");
+      setSelected((prev) => {
+        const n = new Set(prev);
+        n.delete(id);
+        return n;
+      });
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Delete failed");
+    }
   };
 
-  const handleDuplicate = (id: number) => {
-    const src =
-      (localRows ?? seedDatasets).find((d) => d.id === id) ?? rows.find((d) => d.id === id);
+  const handleDuplicate = async (id: number) => {
+    const src = rows.find((d) => d.id === id);
     if (!src) return;
-    const dup: Dataset = {
-      ...src,
-      id: Date.now(),
-      name: `${src.name}_copy`,
-      source: `${src.databaseName}.${src.schema}.${src.table ?? "virtual"}_copy`,
-      createdBy: { id: 1, name: "Akmal Hazriq" },
-      modifiedBy: { id: 1, name: "Akmal Hazriq" },
-      modified: new Date().toISOString(),
-      columns: [...src.columns],
-      metrics: [...src.metrics],
-      owners: [...src.owners],
-    };
-    setLocalRows((prev) => [dup, ...(prev ?? seedDatasets)]);
-    setRows((prev) => [dup, ...prev].slice(0, pageSize));
-    setTotal((t) => t + 1);
-    setPage(1);
-    showToast(`Duplicated as ${dup.name}`);
+    try {
+      const res = await fetch("/api/datasets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `${src.name}_copy`,
+          databaseId: src.databaseId,
+          schema: src.schema,
+          tableName: src.table,
+          type: src.type,
+          mainDatetimeColumn: src.mainDatetimeColumn,
+          description: src.description,
+          sql: src.sql,
+          defaultEndpoint: src.defaultEndpoint,
+          timeGrain: src.timeGrain,
+          cacheTimeout: src.cacheTimeout,
+          offset: src.offset,
+          fetchValuesPredicate: src.fetchValuesPredicate,
+          templateParams: src.templateParams,
+          columns: src.columns,
+          metrics: src.metrics,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Duplicate failed (${res.status})`);
+      }
+      setPage(1);
+      setReloadKey((k) => k + 1);
+      const j = (await res.json()) as { name?: string };
+      showToast(`Duplicated as ${j.name ?? `${src.name}_copy`}`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Duplicate failed");
+    }
   };
 
   const openCreate = () => {
@@ -273,45 +264,68 @@ export default function DatasetListPage() {
     setEditorOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editing) return;
     if (!editing.name.trim()) {
       showToast("Dataset name is required");
       return;
     }
-    const db = seedDatabases.find((x) => x.id === editing.databaseId);
-    const source =
-      editing.type === "virtual"
-        ? `${editing.databaseName}: ${editing.sql?.slice(0, 48) ?? "SELECT ..."}` +
-          (editing.sql && editing.sql.length > 48 ? "…" : "")
-        : `${editing.databaseName}.${editing.schema}.${editing.table ?? ""}`;
-    const saved: Dataset = {
-      ...editing,
-      name: editing.name.trim(),
-      backend: db?.backend ?? editing.backend,
-      databaseName: db?.name ?? editing.databaseName,
-      source,
-      modified: new Date().toISOString(),
-      modifiedBy: { id: 1, name: "Akmal Hazriq" },
-    };
-    if (isNew) {
-      const newId = Date.now();
-      saved.id = newId;
-      setLocalRows((prev) => [saved, ...(prev ?? seedDatasets)]);
-      setRows((prev) => [saved, ...prev].slice(0, pageSize));
-      setTotal((t) => t + 1);
-      setPage(1);
-      showToast(`Dataset "${saved.name}" created`);
-    } else {
-      setRows((prev) => prev.map((d) => (d.id === saved.id ? saved : d)));
-      setLocalRows((prev) => {
-        const base = prev ?? seedDatasets;
-        return base.map((d) => (d.id === saved.id ? saved : d));
-      });
-      showToast(`Dataset "${saved.name}" saved`);
+    if (editing.type === "virtual" && !editing.sql?.trim()) {
+      showToast("SQL is required for virtual datasets");
+      return;
     }
-    setEditorOpen(false);
-    setEditing(null);
+    if (editing.type === "physical" && !editing.table) {
+      showToast("Table is required for physical datasets");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        name: editing.name.trim(),
+        databaseId: editing.databaseId,
+        schema: editing.schema,
+        tableName: editing.table,
+        type: editing.type,
+        mainDatetimeColumn: editing.mainDatetimeColumn,
+        description: editing.description,
+        sql: editing.sql,
+        defaultEndpoint: editing.defaultEndpoint,
+        timeGrain: editing.timeGrain,
+        cacheTimeout: editing.cacheTimeout,
+        offset: editing.offset,
+        fetchValuesPredicate: editing.fetchValuesPredicate,
+        templateParams: editing.templateParams,
+        columns: editing.columns,
+        metrics: editing.metrics,
+      };
+      let res: Response;
+      if (isNew) {
+        res = await fetch("/api/datasets", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        res = await fetch(`/api/datasets/${editing.id}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Save failed (${res.status})`);
+      }
+      showToast(isNew ? `Dataset "${payload.name}" created` : `Dataset "${payload.name}" saved`);
+      setEditorOpen(false);
+      setEditing(null);
+      if (isNew) setPage(1);
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const refreshMeta = (d: Dataset) => {
@@ -370,7 +384,7 @@ export default function DatasetListPage() {
                   className="border-input bg-background h-8 rounded-md border px-2 pr-6 text-xs font-medium"
                 >
                   <option value="all">All databases</option>
-                  {seedDatabases.map((db) => (
+                  {liveDbs.map((db) => (
                     <option key={db.id} value={db.id}>
                       {db.name} · {db.backend}
                     </option>
@@ -460,16 +474,16 @@ export default function DatasetListPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => {
-                  const ids = selected;
-                  setLocalRows((prev) => {
-                    const base = prev ?? seedDatasets;
-                    return base.filter((d) => !ids.has(d.id));
-                  });
-                  setRows((prev) => prev.filter((d) => !ids.has(d.id)));
-                  setTotal((t) => Math.max(0, t - ids.size));
+                onClick={async () => {
+                  const ids = [...selected];
+                  let ok = 0;
+                  for (const delId of ids) {
+                    const res = await fetch(`/api/datasets/${delId}`, { method: "DELETE" });
+                    if (res.ok) ok += 1;
+                  }
                   setSelected(new Set());
-                  showToast(`${ids.size} datasets deleted`);
+                  setReloadKey((k) => k + 1);
+                  showToast(ok ? `${ok} datasets deleted` : "Delete failed");
                 }}
               >
                 <Trash2 className="mr-1 h-3 w-3" />
@@ -700,16 +714,16 @@ export default function DatasetListPage() {
                       <td className="hidden px-2 py-2.5 lg:table-cell">
                         <span className="inline-flex items-center gap-1.5">
                           <span className="bg-secondary text-secondary-foreground grid h-5 w-5 place-items-center rounded-full text-[10px] font-medium">
-                            {initials(d.createdBy.name)}
+                            {initials(d.createdBy?.name ?? "Sample")}
                           </span>
-                          <span className="text-xs">{d.createdBy.name}</span>
+                          <span className="text-xs">{d.createdBy?.name ?? "Sample"}</span>
                         </span>
                       </td>
                       <td className="hidden px-2 py-2.5 md:table-cell">
                         <div className="text-xs">{formatDate(d.modified)}</div>
                         <div className="text-muted-foreground flex items-center gap-1 text-[11px]">
                           <Clock3 className="h-3 w-3" />
-                          {d.modifiedBy.name}
+                          {d.modifiedBy?.name ?? "Sample"}
                         </div>
                       </td>
                       <td className="px-2 py-3">
@@ -842,10 +856,8 @@ export default function DatasetListPage() {
           </div>
         </div>
         <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
-          Data layer: <code className="bg-muted rounded px-1 py-0.5">src/data/datasets.ts</code>{" "}
-          (hand-authored against <code className="bg-muted rounded px-1 py-0.5">seedDatabases</code>
-          ) + <code className="bg-muted rounded px-1 py-0.5">routes/api/datasets/index.get.ts</code>
-          . Same-origin placeholder — no forked database names. Mutations client-side only.
+          Data via <code className="bg-muted rounded px-1 py-0.5">/api/datasets</code> —
+          Postgres + Drizzle.
         </p>
       </div>
 
@@ -864,7 +876,7 @@ export default function DatasetListPage() {
                 </h2>
                 <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
                   Columns, metrics, and settings. Virtual datasets use SQL — physical datasets point
-                  at a real table from <code className="bg-muted rounded px-1">seedDatabases</code>.
+                  at a real table from <code className="bg-muted rounded px-1">liveDbs</code> (live — /api/databases).
                 </p>
                 <p className="text-muted-foreground mt-1 font-mono text-[11px]">
                   {editing.source} · {editing.backend}
@@ -1233,7 +1245,7 @@ export default function DatasetListPage() {
                         <select
                           value={editing.databaseId}
                           onChange={(e) => {
-                            const db = seedDatabases.find((x) => x.id === e.target.value);
+                            const db = liveDbs.find((x) => x.id === e.target.value);
                             if (db)
                               setEditing({
                                 ...editing,
@@ -1249,7 +1261,7 @@ export default function DatasetListPage() {
                           }}
                           className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
                         >
-                          {seedDatabases.map((db) => (
+                          {liveDbs.map((db) => (
                             <option key={db.id} value={db.id}>
                               {db.name} · {db.backend}
                             </option>
@@ -1267,7 +1279,7 @@ export default function DatasetListPage() {
                           className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
                         >
                           {(
-                            seedDatabases.find((x) => x.id === editing.databaseId)?.schemas ?? []
+                            liveDbs.find((x) => x.id === editing.databaseId)?.schemas ?? []
                           ).map((s) => (
                             <option key={s.name} value={s.name}>
                               {s.name}
@@ -1287,7 +1299,7 @@ export default function DatasetListPage() {
                             className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 font-mono text-sm text-xs"
                           >
                             {(
-                              seedDatabases
+                              liveDbs
                                 .find((x) => x.id === editing.databaseId)
                                 ?.schemas.find((s) => s.name === editing.schema)?.tables ?? []
                             ).map((t) => (
@@ -1393,7 +1405,7 @@ export default function DatasetListPage() {
                     <label className="space-y-1.5">
                       <span className="text-xs font-medium">Owners (comma-separated)</span>
                       <Input
-                        value={editing.owners.map((o) => o.name).join(", ")}
+                        value={editing.owners.map((o) => (o as {name?: string})?.name ?? "Sample").join(", ")}
                         onChange={(e) =>
                           setEditing({
                             ...editing,
@@ -1404,7 +1416,7 @@ export default function DatasetListPage() {
                               .map((name, i) => ({ id: i + 1, name })),
                           })
                         }
-                        placeholder="Akmal Hazriq, Mira Chen"
+                        placeholder="Admin User, Data Analyst"
                       />
                     </label>
                     <label className="space-y-1.5">
@@ -1436,8 +1448,8 @@ export default function DatasetListPage() {
               <Button variant="outline" size="sm" onClick={() => setEditorOpen(false)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleSave} className="ml-auto">
-                {isNew ? "Create dataset" : "Save changes"}
+              <Button size="sm" onClick={handleSave} className="ml-auto" disabled={saving}>
+                {saving ? "Saving…" : isNew ? "Create dataset" : "Save changes"}
               </Button>
             </div>
           </div>

@@ -5,7 +5,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "dev-dist", "node_modules", "auto-imports.d.ts"] },
+  { ignores: ["dist", "dev-dist", "node_modules", "auto-imports.d.ts", "drizzle"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/src/**/*.{ts,tsx}"],
@@ -26,7 +26,7 @@ export default tseslint.config(
   },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
-    files: ["routes/**/*.{ts,tsx}", "server.ts", "configs/**/*.{ts,tsx}"],
+    files: ["routes/**/*.{ts,tsx}", "server.ts", "configs/**/*.{ts,tsx}", "drizzle.config.ts", "src/db/**/*.{ts,tsx}"],
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.node,

@@ -25,7 +25,7 @@ export default defineConfig({
     Pages({
       dirs: "src/pages",
       extensions: ["tsx", "jsx"],
-      importMode: "sync",
+      importMode: "async",
     }),
     svgr(),
 
@@ -56,6 +56,17 @@ export default defineConfig({
       "@tanstack/charts/scales/ordinal",
       "@tanstack/charts/tooltip",
     ],
+  },
+
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          tanstack: ["@tanstack/charts", "@tanstack/charts/react"],
+          vendor: ["react", "react-dom", "react-router"],
+        },
+      },
+    },
   },
 
   resolve: {

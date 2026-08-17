@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 import { colorLegend, defineChart, barY, lineY, areaY, dot, rect, boxY } from "@tanstack/charts";
 import { Chart } from "@tanstack/charts/react";
 import { scaleBand } from "@tanstack/charts/scales/band";
@@ -21,6 +23,11 @@ type Props = {
   /** Raw rows for Table / Box Plot */
   rawRows?: DatasetSampleRow[];
   rowLimit?: number;
+  /** Cross-filter: Bar-only — click a bar to filter other charts */
+  onCrossFilter?: (value: string) => void;
+  selectedValue?: string | null;
+  /** Drill-to-detail: Bar-only — right-click a bar to view underlying rows */
+  onDrillDetail?: (payload: { dimension: string; value: string }) => void;
 };
 
 // OKLCH tokens from src/index.css — never let TanStack leak its own defaults
@@ -80,13 +87,59 @@ export default function ChartRenderer({
   showLegend = true,
   rawRows,
   rowLimit = 10,
+  onCrossFilter,
+  selectedValue,
+  onDrillDetail,
 }: Props) {
+  const barWrapRef = useRef<HTMLDivElement>(null);
+
+  // Highlight/dim bars when a cross-filter is active on this chart
+  useEffect(() => {
+    if (vizType !== "Bar") return;
+    let raf = 0;
+    let tries = 0;
+    const apply = () => {
+      const wrap = barWrapRef.current;
+      if (!wrap) return;
+      const svg = wrap.querySelector("svg");
+      if (!svg) {
+        if (tries++ < 8) raf = window.requestAnimationFrame(apply);
+        return;
+      }
+      const rects = Array.from(svg.querySelectorAll("rect")) as SVGRectElement[];
+      const candidates = rects.filter((r) => {
+        const w = Number(r.getAttribute("width") ?? 0);
+        const h = Number(r.getAttribute("height") ?? 0);
+        return w > 6 && h > 6 && w < 300 && h < 360;
+      });
+      let bars: SVGRectElement[] = candidates.length === data.length ? candidates : candidates.slice(0, data.length);
+      if (bars.length !== data.length) {
+        const sorted = [...candidates].sort((a, b) => Number(a.getAttribute("x") ?? 0) - Number(b.getAttribute("x") ?? 0));
+        bars = sorted.slice(0, data.length);
+      } else {
+        bars.sort((a, b) => Number(a.getAttribute("x") ?? 0) - Number(b.getAttribute("x") ?? 0));
+      }
+      if (!bars.length && tries++ < 8) {
+        raf = window.requestAnimationFrame(apply);
+        return;
+      }
+      bars.forEach((rect, i) => {
+        const label = data[i]?.label;
+        if (label == null) return;
+        rect.style.cursor = onCrossFilter ? "pointer" : "default";
+        rect.style.opacity = selectedValue ? (label === selectedValue ? "1" : "0.28") : "1";
+        rect.style.transition = "opacity 150ms ease";
+      });
+    };
+    apply();
+    return () => window.cancelAnimationFrame(raf);
+  }, [vizType, data, selectedValue, onCrossFilter]);
   if (vizType === "Table") {
     const rows = (rawRows ?? dataset.sampleRows ?? []).slice(0, rowLimit);
     if (!rows.length)
       return (
         <p className="text-muted-foreground px-6 py-10 text-center text-xs">
-          No sample rows for {dataset.name}.
+          No sample rows for {dataset?.name ?? "this dataset"}.
         </p>
       );
     const cols = dataset.columns.slice(0, 6);
@@ -188,12 +241,89 @@ export default function ChartRenderer({
       },
       tooltip,
     });
+    const getBarLabelAt = (e: React.MouseEvent<HTMLDivElement>): string | null => {
+      const wrap = barWrapRef.current;
+      if (!wrap) return null;
+      const svg = wrap.querySelector("svg");
+      if (!svg) return null;
+      const rects = Array.from(svg.querySelectorAll("rect")) as SVGRectElement[];
+      const candidates = rects.filter((r) => {
+        const w = Number(r.getAttribute("width") ?? 0);
+        const h = Number(r.getAttribute("height") ?? 0);
+        return w > 6 && h > 6 && w < 300 && h < 360;
+      });
+      let bars: SVGRectElement[] = candidates.length === data.length ? candidates : candidates.slice(0, data.length);
+      if (bars.length !== data.length) {
+        bars = [...candidates].sort((a, b) => Number(a.getAttribute("x") ?? 0) - Number(b.getAttribute("x") ?? 0)).slice(0, data.length);
+      } else {
+        bars.sort((a, b) => Number(a.getAttribute("x") ?? 0) - Number(b.getAttribute("x") ?? 0));
+      }
+      for (let i = 0; i < bars.length; i++) {
+        const box = bars[i].getBoundingClientRect();
+        if (e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom) {
+          return data[i]?.label ?? null;
+        }
+      }
+      const svgBox = svg.getBoundingClientRect();
+      const relX = e.clientX - svgBox.left;
+      const leftInset = 48;
+      const plotW = svgBox.width - leftInset - 12;
+      if (plotW <= 0 || relX < leftInset) return null;
+      const idx = Math.min(data.length - 1, Math.max(0, Math.floor(((relX - leftInset) / plotW) * data.length)));
+      return data[idx]?.label ?? null;
+    };
+    const handleBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!onCrossFilter) return;
+      const label = getBarLabelAt(e);
+      if (label != null) onCrossFilter(label);
+    };
+    const handleBarContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!onDrillDetail || !dimension) return;
+      e.preventDefault();
+      const label = getBarLabelAt(e);
+      if (label != null) onDrillDetail({ dimension, value: label });
+    };
+    const interactive = Boolean(onCrossFilter || onDrillDetail);
     return (
-      <Chart
-        definition={definition}
-        ariaLabel={`${metricLabel} by ${dimension ?? "total"} — Bar`}
-        className="h-[360px] w-full sm:h-[400px]"
-      />
+      <div
+        ref={barWrapRef}
+        onClick={onCrossFilter ? handleBarClick : undefined}
+        onContextMenu={onDrillDetail && dimension ? handleBarContextMenu : undefined}
+        role={interactive ? "button" : undefined}
+        tabIndex={interactive ? 0 : undefined}
+        onKeyDown={
+          interactive
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  const first = data[0]?.label;
+                  if (first != null && onCrossFilter) onCrossFilter(first);
+                }
+              }
+            : undefined
+        }
+        className={interactive ? "h-[360px] w-full cursor-pointer sm:h-[400px]" : "h-[360px] w-full sm:h-[400px]"}
+        aria-label={
+          interactive
+            ? `Bar chart: ${dimension ?? "category"} — click to filter, right-click for row details`
+            : undefined
+        }
+        title={
+          onCrossFilter && onDrillDetail
+            ? `Click a bar to filter other charts by ${dimension ?? "category"} · Right-click for row-level data`
+            : onCrossFilter
+              ? `Click a bar to filter other charts by ${dimension ?? "category"}`
+              : onDrillDetail
+                ? `Right-click a bar for row-level data`
+                : undefined
+        }
+      >
+        <Chart
+          definition={definition}
+          ariaLabel={`${metricLabel} by ${dimension ?? "total"} — Bar`}
+          className="h-full w-full"
+        />
+      </div>
     );
   }
 

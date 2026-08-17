@@ -17,11 +17,9 @@ import {
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { mockHistory } from "@/data/sqllab";
 import type { QueryHistoryEntry } from "@/types/sqllab";
-import { seedDatabases } from "@/data/databases";
-
-type ApiResponse = { data: QueryHistoryEntry[]; total: number; page: number; pageSize: number };
+import { fetchList as apiFetchList, ApiError } from "@/lib/api";
+import type { DatabaseConnection } from "@/types/database";
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleString("en-GB", {
@@ -50,9 +48,11 @@ export default function QueryHistoryPage() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
 
+  const [liveDbs, setLiveDbs] = useState<DatabaseConnection[]>([]);
   const [rows, setRows] = useState<QueryHistoryEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [inspect, setInspect] = useState<QueryHistoryEntry | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -63,60 +63,56 @@ export default function QueryHistoryPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (user) params.set("user", user);
-    if (database !== "all") params.set("database", database);
-    if (status !== "all") params.set("status", status);
-    if (from) params.set("from", new Date(from).toISOString());
-    if (to) params.set("to", new Date(to).toISOString());
-    params.set("sortBy", sortBy);
-    params.set("sortDir", sortDir);
-    params.set("page", String(page));
-    params.set("pageSize", String(pageSize));
-    fetch(`/api/sqllab/history?${params.toString()}`)
-      .then((r) => r.json() as Promise<ApiResponse>)
-      .then((res) => {
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await apiFetchList<QueryHistoryEntry>("/api/sqllab/history", {
+          q: q || undefined,
+          user: user || undefined,
+          database: database !== "all" ? database : undefined,
+          status: status !== "all" ? status : undefined,
+          from: from ? new Date(from).toISOString() : undefined,
+          to: to ? new Date(to).toISOString() : undefined,
+          sortBy,
+          sortDir,
+          page,
+          pageSize,
+        });
         if (!cancelled) {
           setRows(res.data);
           setTotal(res.total);
         }
-      })
-      .catch(() => {
+      } catch (e) {
         if (cancelled) return;
-        let data = [...mockHistory];
-        if (q) {
-          const qq = q.toLowerCase();
-          data = data.filter(
-            (h) =>
-              h.sql.toLowerCase().includes(qq) ||
-              h.user.toLowerCase().includes(qq) ||
-              h.database.toLowerCase().includes(qq) ||
-              (h.error ?? "").toLowerCase().includes(qq),
-          );
-        }
-        if (user) data = data.filter((h) => h.user.toLowerCase().includes(user.toLowerCase()));
-        if (database !== "all") data = data.filter((h) => h.database === database);
-        if (status !== "all") data = data.filter((h) => h.status === status);
-        if (from) data = data.filter((h) => new Date(h.time).getTime() >= new Date(from).getTime());
-        if (to) data = data.filter((h) => new Date(h.time).getTime() <= new Date(to).getTime());
-        data.sort((a, b) => {
-          const dir = sortDir === "asc" ? 1 : -1;
-          if (sortBy === "database") return dir * a.database.localeCompare(b.database);
-          if (sortBy === "rows") return dir * (a.rows - b.rows);
-          return dir * (new Date(a.time).getTime() - new Date(b.time).getTime());
-        });
-        setRows(data.slice((page - 1) * pageSize, page * pageSize));
-        setTotal(data.length);
-      })
-      .finally(() => {
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "Could not load Query history";
+        setError(msg);
+        showToast(msg);
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
   }, [q, user, database, status, from, to, sortBy, sortDir, page, pageSize]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDbs() {
+      try {
+        const res = await apiFetchList<DatabaseConnection>("/api/databases", { page: 1, pageSize: 50 });
+        if (!cancelled) setLiveDbs(res.data);
+      } catch { if (!cancelled) setLiveDbs([]); }
+    }
+    void loadDbs();
+    return () => { cancelled = true; };
+  }, []);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -177,7 +173,7 @@ export default function QueryHistoryPage() {
                     className="border-input bg-background h-8 rounded-md border px-2 pr-6 text-xs font-medium"
                   >
                     <option value="all">All databases</option>
-                    {seedDatabases.map((db) => (
+                    {liveDbs.map((db) => (
                       <option key={db.id} value={db.id}>
                         {db.name} · {db.backend}
                       </option>
@@ -291,6 +287,12 @@ export default function QueryHistoryPage() {
             </Link>
           </div>
         </div>
+
+        {error && (
+          <div className="border-destructive/30 bg-destructive/10 text-destructive mt-4 rounded-md border px-3 py-2 text-xs">
+            {error}
+          </div>
+        )}
 
         {/* Table */}
         <div className="border-border bg-card mt-4 overflow-hidden rounded-lg border">
@@ -519,12 +521,9 @@ export default function QueryHistoryPage() {
           </div>
         </div>
         <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
-          Data layer: <code className="bg-muted rounded px-1 py-0.5">src/data/sqllab.ts</code>{" "}
-          <code className="bg-muted rounded px-1 py-0.5">mockHistory</code> +{" "}
-          <code className="bg-muted rounded px-1 py-0.5">
-            routes/api/sqllab/history/index.get.ts
-          </code>{" "}
-          — same canonical store SQL Lab appends to. Placeholder, no persistence.
+          Data layer: Postgres via <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/history</code> (
+          <code className="bg-muted rounded px-1 py-0.5">query_history</code> +{" "}
+          <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/execute</code> appends) — live, no mock.
         </p>
       </div>
 

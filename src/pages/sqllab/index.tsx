@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router";
 
 import {
   Bookmark,
+  Braces,
   ChevronDown,
   ChevronRight,
   Clock3,
@@ -10,21 +11,26 @@ import {
   Download,
   FlaskConical,
   History,
+  Lightbulb,
+  Loader2,
+  Pencil,
   Play,
   Plus,
   Save,
   Search,
+  Sparkles,
   Square,
   Table2,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { mockDatabases, mockHistory, mockSavedQueries, getMockResult } from "@/data/sqllab";
-import type { QueryHistoryEntry, QueryTab, SavedQuery } from "@/types/sqllab";
+import type { QueryHistoryEntry, QueryTab, SavedQuery, SqlDatabase } from "@/types/sqllab";
+import type { HealResponse, Nl2SqlResponse } from "@/types/ai";
 
 const SQL_KEYWORDS =
   /(\bSELECT\b|\bFROM\b|\bWHERE\b|\bGROUP BY\b|\bORDER BY\b|\bLIMIT\b|\bJOIN\b|\bON\b|\bAS\b|\bAND\b|\bOR\b|\bIN\b|\bNOT\b|\bNULL\b|\bCOUNT\b|\bSUM\b|\bAVG\b|\bNOW\b|\bINTERVAL\b|\bDESC\b|\bASC\b)/gi;
@@ -76,21 +82,71 @@ function formatIso(iso: string) {
 
 export default function SqlLabPage() {
   const navigate = useNavigate();
-  const [databases] = useState(mockDatabases);
+  const [databases, setDatabases] = useState<SqlDatabase[]>([]);
+  const [treeLoading, setTreeLoading] = useState(true);
+  const [treeError, setTreeError] = useState<string | null>(null);
   const [selectedDb, setSelectedDb] = useState("analytics");
   const [selectedSchema, setSelectedSchema] = useState("public");
   const [tableSearch, setTableSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["orders"]));
+
+  // Fetch real databases for the tree — no silent fallback to mock (show error state instead)
+  useEffect(() => {
+    let cancelled = false;
+    setTreeLoading(true);
+    setTreeError(null);
+    fetch("/api/sqllab/databases")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ databases: SqlDatabase[] }>;
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setDatabases(res.databases ?? []);
+        if (res.databases?.length) {
+          const ids = new Set(res.databases.map((d) => d.id));
+          if (!ids.has(selectedDb)) {
+            setSelectedDb(res.databases[0].id);
+            setSelectedSchema(res.databases[0].schemas[0]?.name ?? "public");
+          }
+        }
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setTreeError(e instanceof Error ? e.message : "Failed to load databases");
+      })
+      .finally(() => {
+        if (!cancelled) setTreeLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [tabs, setTabs] = useState<QueryTab[]>(() => [newTab()]);
   const [activeId, setActiveId] = useState<string>(() => tabs[0]?.id ?? "");
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
 
   const [bottomTab, setBottomTab] = useState<"results" | "history" | "saved">("results");
-  const [history, setHistory] = useState<QueryHistoryEntry[]>(mockHistory);
-  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>(mockSavedQueries);
+  const [history, setHistory] = useState<QueryHistoryEntry[]>([]);
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
+
+  // AI — NL2SQL
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<Nl2SqlResponse | null>(null);
+  const [aiEditSql, setAiEditSql] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  // AI — heal
+  const [healLoading, setHealLoading] = useState(false);
+  const [healResult, setHealResult] = useState<HealResponse | null>(null);
+  const [healError, setHealError] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -107,9 +163,7 @@ export default function SqlLabPage() {
     if (openId) {
       try {
         const raw = sessionStorage.getItem("metric:openSavedQuery");
-        const sq: SavedQuery | null = raw
-          ? (JSON.parse(raw) as SavedQuery)
-          : (mockSavedQueries.find((s) => String(s.id) === openId) ?? null);
+        const sq: SavedQuery | null = raw ? (JSON.parse(raw) as SavedQuery) : null;
         if (sq) {
           const nt: QueryTab = {
             id: Math.random().toString(36).slice(2, 8),
@@ -131,9 +185,7 @@ export default function SqlLabPage() {
     if (!opened && histId) {
       try {
         const raw = sessionStorage.getItem("metric:openHistoryEntry");
-        const h: QueryHistoryEntry | null = raw
-          ? (JSON.parse(raw) as QueryHistoryEntry)
-          : (mockHistory.find((x) => String(x.id) === histId) ?? null);
+        const h: QueryHistoryEntry | null = raw ? (JSON.parse(raw) as QueryHistoryEntry) : null;
         if (h) {
           const nt: QueryTab = {
             id: Math.random().toString(36).slice(2, 8),
@@ -160,9 +212,17 @@ export default function SqlLabPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const db = databases.find((d) => d.id === selectedDb) ?? databases[0];
-  const schema = db.schemas.find((s) => s.name === selectedSchema) ??
-    db.schemas[0] ?? { name: "public", tables: [] };
+  // Clear heal when active tab or its error changes (fresh run)
+  useEffect(() => {
+    setHealResult(null);
+    setHealError(null);
+    setHealLoading(false);
+  }, [activeId, activeTab?.error]);
+
+  const db = databases.find((d) => d.id === selectedDb) ?? databases[0] ?? null;
+  const schema = db
+    ? (db.schemas.find((s) => s.name === selectedSchema) ?? db.schemas[0] ?? { name: "public", tables: [] as SqlDatabase["schemas"][number]["tables"] })
+    : { name: "public", tables: [] as SqlDatabase["schemas"][number]["tables"] };
 
   const filteredTables = useMemo(() => {
     if (!tableSearch.trim()) return schema.tables;
@@ -213,36 +273,23 @@ export default function SqlLabPage() {
     }, 100);
 
     try {
-      // Try real handler first, fall back to client mock if dev server not ready
-      let data: {
+      type ExecData = {
         columns: string[];
         rows: Record<string, string | number>[];
         rowCount: number;
         durationMs: number;
         error?: string;
-      } | null = null;
-      try {
-        const res = await fetch("/api/sqllab/execute", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sql, limit: activeTab.limit }),
-        });
-        if (res.ok) data = (await res.json()) as typeof data;
-        else {
-          const err = (await res.json()) as { error?: string };
-          throw new Error(err.error ?? "Query failed");
-        }
-      } catch {
-        // fallback to client mock
-        const mock = getMockResult(sql, activeTab.limit);
-        data = {
-          columns: mock.columns,
-          rows: mock.rows,
-          rowCount: mock.rows.length,
-          durationMs: mock.durationMs,
-        };
-        if (sql.toLowerCase().includes("from orderz"))
-          throw new Error('relation "orderz" does not exist');
+      };
+      let data: ExecData | null = null;
+      const res = await fetch("/api/sqllab/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql, limit: activeTab.limit }),
+      });
+      if (res.ok) data = (await res.json()) as ExecData;
+      else {
+        const err = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(err?.error ?? `Query failed (${res.status})`);
       }
 
       if (!data) throw new Error("No result");
@@ -263,7 +310,7 @@ export default function SqlLabPage() {
         {
           id: Date.now(),
           time: new Date().toISOString(),
-          user: "Akmal Hazriq",
+          user: "Admin User",
           database: activeTab.databaseId,
           schema: activeTab.schemaName,
           rows: data!.rowCount,
@@ -282,7 +329,7 @@ export default function SqlLabPage() {
         {
           id: Date.now(),
           time: new Date().toISOString(),
-          user: "Akmal Hazriq",
+          user: "Admin User",
           database: activeTab.databaseId,
           schema: activeTab.schemaName,
           rows: 0,
@@ -345,7 +392,7 @@ export default function SqlLabPage() {
       database: activeTab.databaseId,
       schema: activeTab.schemaName,
       sql: activeTab.sql,
-      savedBy: "Akmal Hazriq",
+      savedBy: "Admin User",
       modified: new Date().toISOString(),
     };
     setSavedQueries((p) => [sq, ...p]);
@@ -368,6 +415,81 @@ export default function SqlLabPage() {
     showToast("Opened saved query");
   };
 
+  const generateNl2Sql = async () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt) { setAiError("Describe what you want to query."); return; }
+    setAiLoading(true);
+    setAiError(null);
+    setAiResult(null);
+    setAiEditSql(null);
+    try {
+      const r = await fetch("/api/ai/nl2sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, databaseId: selectedDb, schema: selectedSchema }),
+      });
+      const j = (await r.json()) as Nl2SqlResponse & { error?: string };
+      if (!r.ok) throw new Error(j.error ?? "AI request failed");
+      setAiResult(j);
+      setAiEditSql(j.sql);
+    } catch (e: unknown) {
+      setAiError(e instanceof Error ? e.message : "AI request failed");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const insertAiSql = () => {
+    const sql = (aiEditSql ?? aiResult?.sql ?? "").trim();
+    if (!sql) return;
+    updateActive({ sql, error: undefined });
+    showToast("Inserted into editor");
+  };
+
+  const openAiInNewTab = () => {
+    const sql = (aiEditSql ?? aiResult?.sql ?? "").trim();
+    if (!sql) return;
+    const nt: QueryTab = {
+      id: Math.random().toString(36).slice(2, 8),
+      title: aiResult ? `AI: ${aiPrompt.slice(0, 22)}` : "AI query",
+      sql,
+      databaseId: selectedDb,
+      schemaName: selectedSchema,
+      limit: 100,
+    };
+    setTabs((p) => [...p, nt]);
+    setActiveId(nt.id);
+    showToast("Opened in new tab");
+  };
+
+  const diagnoseHeal = async () => {
+    if (!activeTab?.error) return;
+    setHealLoading(true);
+    setHealError(null);
+    setHealResult(null);
+    try {
+      const r = await fetch("/api/ai/heal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql: activeTab.sql, errorMessage: activeTab.error, databaseId: selectedDb, schema: selectedSchema }),
+      });
+      const j = (await r.json()) as HealResponse & { error?: string };
+      if (!r.ok) throw new Error(j.error ?? "Diagnose failed");
+      setHealResult(j);
+    } catch (e: unknown) {
+      setHealError(e instanceof Error ? e.message : "Diagnose failed");
+    } finally {
+      setHealLoading(false);
+    }
+  };
+
+  const applyHeal = () => {
+    if (!healResult) return;
+    updateActive({ sql: healResult.fixedSql, error: undefined });
+    setHealResult(null);
+    showToast("Applied fix — review and Run when ready");
+  };
+
   const lineCount = activeTab ? activeTab.sql.split("\n").length : 1;
 
   return (
@@ -383,12 +505,6 @@ export default function SqlLabPage() {
             Write, run, and share SQL — results stay inspectable.
           </span>
           <div className="ml-auto flex items-center gap-2">
-            <span className="text-muted-foreground hidden text-xs lg:inline">
-              No database connected — using mock execution
-            </span>
-            <span className="bg-warning text-warning-foreground rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide">
-              PLACEHOLDER
-            </span>
           </div>
         </div>
 
@@ -409,13 +525,22 @@ export default function SqlLabPage() {
                         const nd = databases.find((d) => d.id === e.target.value);
                         if (nd) setSelectedSchema(nd.schemas[0]?.name ?? "public");
                       }}
-                      className="border-input bg-background h-8 w-full rounded-md border px-2 pr-6 text-xs font-medium"
+                      disabled={treeLoading}
+                      className="border-input bg-background h-8 w-full rounded-md border px-2 pr-6 text-xs font-medium disabled:opacity-50"
                     >
-                      {databases.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name} · {d.type}
-                        </option>
-                      ))}
+                      {treeLoading ? (
+                        <option>Loading…</option>
+                      ) : treeError ? (
+                        <option>— error —</option>
+                      ) : databases.length === 0 ? (
+                        <option>No databases</option>
+                      ) : (
+                        databases.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name} · {d.type}
+                          </option>
+                        ))
+                      )}
                     </select>
                     <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2" />
                   </div>
@@ -428,13 +553,15 @@ export default function SqlLabPage() {
                     <select
                       value={selectedSchema}
                       onChange={(e) => setSelectedSchema(e.target.value)}
-                      className="border-input bg-background h-8 w-full rounded-md border px-2 pr-6 text-xs font-medium"
+                      disabled={!db || treeLoading}
+                      className="border-input bg-background h-8 w-full rounded-md border px-2 pr-6 text-xs font-medium disabled:opacity-50"
                     >
-                      {db.schemas.map((s) => (
+                      {(db?.schemas ?? []).map((s) => (
                         <option key={s.name} value={s.name}>
                           {s.name}
                         </option>
                       ))}
+                      {(!db || (db.schemas.length === 0)) && <option value="public">public</option>}
                     </select>
                     <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2" />
                   </div>
@@ -452,6 +579,16 @@ export default function SqlLabPage() {
               </div>
             </div>
 
+            {treeLoading ? (
+              <p className="text-muted-foreground px-2 py-6 text-center text-xs">Loading databases…</p>
+            ) : treeError ? (
+              <div className="border-destructive/30 bg-destructive/10 m-2 rounded-md border p-3">
+                <p className="text-destructive text-xs font-semibold">Could not load table tree</p>
+                <p className="text-muted-foreground mt-1 text-xs leading-relaxed">{treeError}</p>
+                <p className="text-muted-foreground mt-1 font-mono text-[11px]">GET /api/sqllab/databases failed — no mock fallback</p>
+              </div>
+            ) : (
+            <>
             <div className="flex-1 overflow-y-auto p-2">
               <p className="text-muted-foreground px-1 py-1 text-[11px] font-semibold tracking-widest uppercase">
                 Tables · {filteredTables.length}
@@ -530,14 +667,13 @@ export default function SqlLabPage() {
                 </p>
               )}
             </div>
-
+            </>
+            )}
             <div className="border-border bg-muted/40 border-t p-2 text-[11px] leading-relaxed">
-              <p className="font-medium">Mock tree — no live connection</p>
+              <p className="font-medium">Live — /api/sqllab/databases</p>
               <p className="text-muted-foreground">
-                This tree is seeded in{" "}
-                <code className="bg-background rounded border px-1">src/data/sqllab.ts</code>. Swap
-                for <code className="bg-background rounded border px-1">/api/sqllab/databases</code>{" "}
-                when a DB gateway exists.
+                Tree from Postgres via <code className="bg-background rounded border px-1">/api/sqllab/databases</code> (no mock fallback).{" "}
+                {treeError ? "Last load failed — error above." : `${databases.length} databases`}
               </p>
             </div>
           </aside>
@@ -597,6 +733,111 @@ export default function SqlLabPage() {
                   className="h-7 w-[72px] font-mono text-xs"
                 />
               </div>
+            </div>
+
+            {/* Ask AI — IDE assist, not chatbot bubble */}
+            <div className="border-b" style={{ borderColor: "var(--ai-border)", background: "var(--ai-muted)" }}>
+              <button
+                onClick={() => setAiOpen((v) => !v)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left"
+              >
+                <span className="grid h-6 w-6 place-items-center rounded-md border text-[var(--ai)]" style={{ borderColor: "var(--ai-border)", background: "var(--background)" }}>
+                  <Sparkles className="h-3.5 w-3.5" />
+                </span>
+                <span className="text-xs font-semibold tracking-tight">Ask AI</span>
+                <span className="text-muted-foreground hidden text-xs sm:inline">— describe the query, get editable SQL (never auto-run)</span>
+                <span className="ml-auto inline-flex items-center gap-1.5">
+                  {aiResult && !aiOpen && <span className="bg-ai text-ai-foreground rounded-full px-2 py-0.5 text-[11px] font-medium">Suggestion ready</span>}
+                  {aiOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </span>
+              </button>
+
+              {aiOpen && (
+                <div className="border-t px-3 py-3" style={{ borderColor: "var(--ai-border)" }}>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <div className="relative flex-1">
+                      <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2" />
+                      <Input
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void generateNl2Sql(); } }}
+                        placeholder='Try: "top 10 customers" · "orders per status" · "daily revenue last 30 days"'
+                        className="h-8 bg-white pl-7 text-xs dark:bg-[var(--background)]"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" className="h-8 bg-[var(--ai)] text-[var(--ai-foreground)] hover:opacity-90 text-xs" onClick={generateNl2Sql} disabled={aiLoading}>
+                        {aiLoading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Wand2 className="mr-1 h-3 w-3" />}
+                        {aiLoading ? "Generating…" : "Generate SQL"}
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => { setAiPrompt(""); setAiResult(null); setAiEditSql(null); setAiError(null); }}>
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
+                    Context: <span className="font-mono">{selectedDb}.{selectedSchema}</span> · Uses real table & column names from this database. Generated SQL is shown below for review — <span className="font-medium">never auto-inserted or executed</span>. <span className="bg-ai/10 rounded px-1 font-mono text-[10px]">MOCK</span>
+                  </p>
+
+                  {aiError && <p className="text-destructive mt-2 text-xs">{aiError}</p>}
+
+                  {aiResult && (
+                    <div className="border-ai-border bg-card mt-3 overflow-hidden rounded-md border">
+                      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2" style={{ borderColor: "var(--ai-border)", background: "var(--ai-muted)" }}>
+                        <span className="bg-ai text-ai-foreground inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium">
+                          <Braces className="h-3 w-3" /> Suggestion
+                        </span>
+                        <span className="text-muted-foreground text-[11px]">{aiResult.confidence < 0.6 ? "Low confidence — review closely" : aiResult.confidence < 0.8 ? "Medium confidence" : "High confidence"} · {(aiResult.confidence * 100).toFixed(0)}%</span>
+                        <span className="bg-border h-3 w-px" />
+                        <span className="text-muted-foreground text-[11px]">Tables: {aiResult.tablesUsed.join(", ") || "—"}</span>
+                        <span className="bg-ai/10 ml-auto rounded px-1.5 py-0.5 font-mono text-[10px]">MOCK — template + real schema</span>
+                      </div>
+
+                      <div className="p-3">
+                        <p className="text-muted-foreground text-[11px] font-semibold tracking-widest uppercase">Generated SQL — read-only until you confirm</p>
+                        <pre className="border-editor bg-editor mt-2 overflow-auto rounded-md border p-3 font-mono text-[12px] leading-6 whitespace-pre-wrap text-[var(--editor-foreground)]">
+                          {highlightSql(aiEditSql ?? aiResult.sql).map((p, i) => (
+                            <span key={i} className={p.keyword ? "font-semibold text-[var(--chart-2)]" : ""}>{p.text}</span>
+                          ))}
+                        </pre>
+                        <p className="text-muted-foreground mt-2 text-xs leading-relaxed">{aiResult.explanation}</p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {aiResult.tablesUsed.map((t) => (
+                            <span key={t} className="bg-muted rounded-full px-2 py-0.5 font-mono text-[11px]">{t}</span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Editable preview — reversible before insert */}
+                      <div className="border-t px-3 py-3" style={{ borderColor: "var(--ai-border)" }}>
+                        <label className="space-y-1.5">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium"><Pencil className="h-3 w-3" /> Edit before inserting (optional)</span>
+                          <textarea
+                            value={aiEditSql ?? ""}
+                            onChange={(e) => setAiEditSql(e.target.value)}
+                            spellCheck={false}
+                            rows={Math.min(8, Math.max(3, (aiEditSql ?? aiResult.sql).split("\n").length))}
+                            className="border-input bg-background w-full rounded-md border p-2 font-mono text-[12px] leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ai)]"
+                            style={{ fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace' }}
+                          />
+                        </label>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button size="sm" className="h-7 bg-[var(--ai)] text-[var(--ai-foreground)] hover:opacity-90 text-xs" onClick={insertAiSql}>
+                            <Copy className="mr-1 h-3 w-3" /> Insert into editor
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={openAiInNewTab}>
+                            <Plus className="mr-1 h-3 w-3" /> Open in new tab
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setAiResult(null); setAiEditSql(null); }}>
+                            Dismiss
+                          </Button>
+                          <span className="text-muted-foreground ml-auto self-center text-[11px]">Nothing runs until you press Run.</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Editor — textarea + gutter + highlight preview */}
@@ -762,15 +1003,93 @@ export default function SqlLabPage() {
               {bottomTab === "results" && (
                 <div className="min-h-[260px]">
                   {activeTab?.error ? (
-                    <div className="border-destructive/30 bg-destructive/10 m-3 rounded-md border p-3">
-                      <p className="text-destructive text-xs font-semibold">Query failed</p>
-                      <pre className="mt-1 font-mono text-xs break-words whitespace-pre-wrap text-[var(--editor-foreground)]">
-                        {activeTab.error}
-                      </pre>
-                      <p className="text-muted-foreground mt-2 text-xs">
-                        This is a mock error — in production, diagnostics would offer a fix.
-                        Placeholder for Phase 2 self-healing.
-                      </p>
+                    <div className="space-y-3 p-3">
+                      <div className="border-destructive/30 bg-destructive/10 rounded-md border p-3">
+                        <p className="text-destructive text-xs font-semibold">Query failed</p>
+                        <pre className="mt-1 font-mono text-xs break-words whitespace-pre-wrap text-[var(--editor-foreground)]">
+                          {activeTab.error}
+                        </pre>
+                      </div>
+
+                      {/* AI Assistant — self-healing */}
+                      <div className="overflow-hidden rounded-md border" style={{ borderColor: "var(--ai-border)", background: "var(--ai-muted)" }}>
+                        <div className="flex items-center gap-2 px-3 py-2">
+                          <span className="bg-ai text-ai-foreground grid h-5 w-5 place-items-center rounded">
+                            <Lightbulb className="h-3 w-3" />
+                          </span>
+                          <span className="text-xs font-semibold">AI Assistant</span>
+                          <span className="text-muted-foreground text-[11px]">— diagnose & propose a fix (never auto-applied)</span>
+                          <span className="bg-ai/10 ml-auto rounded px-1.5 py-0.5 font-mono text-[10px]">MOCK</span>
+                        </div>
+
+                        {!healResult && !healLoading && !healError && (
+                          <div className="border-t bg-white px-3 py-3 dark:bg-[var(--card)]" style={{ borderColor: "var(--ai-border)" }}>
+                            <p className="text-muted-foreground text-xs leading-relaxed">
+                              This looks fixable. The assistant will read the real schema to suggest a correction — shown as a diff you must confirm.
+                            </p>
+                            <div className="mt-2 flex gap-2">
+                              <Button size="sm" className="h-7 bg-[var(--ai)] text-[var(--ai-foreground)] hover:opacity-90 text-xs" onClick={diagnoseHeal}>
+                                <Wand2 className="mr-1 h-3 w-3" /> Diagnose
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => showToast("Try: fix the table name and run again")}>
+                                Dismiss
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {healLoading && (
+                          <div className="border-t bg-white px-3 py-4 dark:bg-[var(--card)]" style={{ borderColor: "var(--ai-border)" }}>
+                            <span className="inline-flex items-center gap-2 text-xs"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Diagnosing…</span>
+                          </div>
+                        )}
+
+                        {healError && (
+                          <div className="border-t bg-white px-3 py-3 dark:bg-[var(--card)]" style={{ borderColor: "var(--ai-border)" }}>
+                            <p className="text-destructive text-xs">{healError}</p>
+                            <div className="mt-2 flex gap-2">
+                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={diagnoseHeal}>Retry</Button>
+                              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setHealError(null)}>Dismiss</Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {healResult && (
+                          <div className="border-t bg-white dark:bg-[var(--card)]" style={{ borderColor: "var(--ai-border)" }}>
+                            <div className="px-3 py-3">
+                              <p className="text-xs font-medium leading-relaxed">{healResult.diagnosis}</p>
+                              {healResult.changes.length > 0 ? (
+                                <ul className="mt-2 space-y-1.5">
+                                  {healResult.changes.map((c, i) => (
+                                    <li key={i} className="flex flex-wrap items-center gap-1.5 text-xs">
+                                      <span className="text-muted-foreground">{c.description}</span>
+                                      <span className="bg-destructive/10 rounded border border-destructive/20 px-1.5 py-0.5 font-mono text-[11px] line-through">{c.before}</span>
+                                      <span className="text-muted-foreground">→</span>
+                                      <span className="bg-success/10 rounded border border-[var(--success)]/20 px-1.5 py-0.5 font-mono text-[11px]">{c.after}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-muted-foreground mt-2 text-xs">No automatic fix available — check the schema browser and edit the query manually.</p>
+                              )}
+                              <pre className="border-editor bg-editor mt-3 overflow-auto rounded-md border p-3 font-mono text-[12px] leading-5 whitespace-pre-wrap text-[var(--editor-foreground)]">
+                                {highlightSql(healResult.fixedSql).map((p, i) => (
+                                  <span key={i} className={p.keyword ? "font-semibold text-[var(--chart-2)]" : ""}>{p.text}</span>
+                                ))}
+                              </pre>
+                            </div>
+                            <div className="flex flex-wrap gap-2 border-t px-3 py-2" style={{ borderColor: "var(--ai-border)", background: "var(--ai-muted)" }}>
+                              <Button size="sm" className="h-7 bg-[var(--ai)] text-[var(--ai-foreground)] hover:opacity-90 text-xs" onClick={applyHeal} disabled={!healResult.changes.length}>
+                                Apply fix
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setHealResult(null)}>
+                                Dismiss
+                              </Button>
+                              <span className="text-muted-foreground ml-auto self-center text-[11px]">Replaces the editor — Run is still manual.</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : activeTab?.result ? (
                     <div className="overflow-auto">
@@ -796,7 +1115,7 @@ export default function SqlLabPage() {
                         </button>
                         <button
                           onClick={() =>
-                            showToast("Visualize — opens Chart Explore (Phase 1 next)")
+                            showToast("Chart creation from query results coming in a future update")
                           }
                           className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
                         >
@@ -1021,12 +1340,9 @@ export default function SqlLabPage() {
             </div>
 
             <p className="text-muted-foreground border-border border-t px-4 py-2 text-xs leading-relaxed">
-              Data layer: <code className="bg-muted rounded px-1 py-0.5">src/data/sqllab.ts</code> +{" "}
-              <code className="bg-muted rounded px-1 py-0.5">
-                routes/api/sqllab/databases/index.get.ts
-              </code>{" "}
-              / <code className="bg-muted rounded px-1 py-0.5">/execute.post.ts</code> — in-memory
-              mock tree + seeded result sets. Swap for a DB gateway when a real connection exists.
+              Data layer: Postgres via <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/databases</code> +{" "}
+              <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/execute</code> — real{" "}
+              <code className="bg-muted rounded px-1 py-0.5">pg Pool</code> (10s timeout, READ ONLY) with no mock fallback. Errors surface from the handler; 401 handled by global auth bounce.
             </p>
           </div>
         </div>

@@ -25,7 +25,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { seedDatabases } from "@/data/databases";
 import type { DatabaseBackend, DatabaseConnection } from "@/types/database";
 
 type ApiResponse = { data: DatabaseConnection[]; total: number; page: number; pageSize: number };
@@ -116,13 +115,13 @@ function emptyConnection(): DatabaseConnection {
     maxRows: null,
     defaultSchema: "",
     defaultLimit: null,
-    owners: [{ id: 1, name: "Akmal Hazriq" }],
+    owners: [{ id: 1, name: "Admin User" }],
     version: "",
     schemaCacheEnabled: false,
     sshTunnelEnabled: false,
     sshTunnelHost: "",
     sshTunnelPort: null,
-    modifiedBy: { id: 1, name: "Akmal Hazriq" },
+    modifiedBy: { id: 1, name: "Admin User" },
     modified: now,
     schemas: [{ name: "public", tables: [] }],
   };
@@ -144,8 +143,9 @@ export default function DatabaseListPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [localRows, setLocalRows] = useState<DatabaseConnection[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [saving, setSaving] = useState(false);
 
   // editor
   const [editorOpen, setEditorOpen] = useState(false);
@@ -192,51 +192,11 @@ export default function DatabaseListPage() {
       .then((r) => r.json() as Promise<ApiResponse>)
       .then((res) => {
         if (cancelled) return;
-        let data = res.data;
-        if (localRows) {
-          const map = new Map(localRows.map((d) => [d.id, d]));
-          // overlay edits for visible rows
-          data = data.map((d) => map.get(d.id) ?? d);
-          // deletions: keep only ids still in localRows
-          const ids = new Set(localRows.map((d) => d.id));
-          data = data.filter((d) => ids.has(d.id));
-          // inserts from localRows that match filters but not in page: include if not already
-          // simple: if localRows has items not in server data that pass filter, inject at top
-          const serverIds = new Set(data.map((d) => d.id));
-          const extras = localRows.filter(
-            (d) => !serverIds.has(d.id) && (!q || d.name.toLowerCase().includes(q.toLowerCase())),
-          );
-          if (extras.length)
-            data = [...extras.slice(0, pageSize - data.length), ...data].slice(0, pageSize);
-        }
-        setRows(data);
-        setTotal(
-          localRows
-            ? localRows.filter(
-                (d) =>
-                  (!q || d.name.toLowerCase().includes(q.toLowerCase())) &&
-                  (backend === "all" || d.backend === backend),
-              ).length
-            : res.total,
-        );
+        setRows(res.data);
+        setTotal(res.total);
       })
       .catch(() => {
-        // fallback to client-side seed if API not ready (e.g. direct file open)
-        if (!cancelled) {
-          let data = [...seedDatabases];
-          if (q) data = data.filter((d) => d.name.toLowerCase().includes(q.toLowerCase()));
-          if (backend !== "all") data = data.filter((d) => d.backend === backend);
-          data.sort((a, b) => {
-            const dir = sortDir === "asc" ? 1 : -1;
-            if (sortBy === "name") return dir * a.name.localeCompare(b.name);
-            if (sortBy === "backend") return dir * a.backend.localeCompare(b.backend);
-            return dir * a.modified.localeCompare(b.modified);
-          });
-          const totalFallback = data.length;
-          const start = (page - 1) * pageSize;
-          setRows(data.slice(start, start + pageSize));
-          setTotal(totalFallback);
-        }
+        if (!cancelled) showToast("Could not load databases");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -244,45 +204,59 @@ export default function DatabaseListPage() {
     return () => {
       cancelled = true;
     };
-  }, [q, backend, sortBy, sortDir, page, pageSize, localRows]);
+  }, [q, backend, sortBy, sortDir, page, pageSize, reloadKey]);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
 
-  const handleDelete = (id: string) => {
-    setRows((prev) => prev.filter((d) => d.id !== id));
-    setLocalRows((prev) => {
-      const base = prev ?? seedDatabases;
-      return base.filter((d) => d.id !== id);
-    });
-    setSelected((prev) => {
-      const n = new Set(prev);
-      n.delete(id);
-      return n;
-    });
-    setTotal((t) => Math.max(0, t - 1));
-    showToast("Database deleted");
+  const handleDelete = async (id: string) => {
+    try {
+      const res = await fetch(`/api/databases/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        const msg = (j as { statusMessage?: string; message?: string })?.statusMessage ?? (j as { message?: string })?.message ?? `Delete failed (${res.status})`;
+        throw new Error(msg);
+      }
+      showToast("Database deleted");
+      setSelected((prev) => {
+        const n = new Set(prev);
+        n.delete(id);
+        return n;
+      });
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Delete failed");
+    }
   };
 
   const handleTestConnection = async (db: DatabaseConnection) => {
     setTesting(true);
-    await new Promise((r) => setTimeout(r, 900));
-    setTesting(false);
-    const ok = !!db.sqlalchemyUri.trim();
-    showToast(
-      ok
-        ? `Connection to "${db.name}" succeeded — ${db.schemas.reduce((n, s) => n + s.tables.length, 0)} tables reachable`
-        : `Connection failed — SQLAlchemy URI is empty`,
-    );
+    try {
+      const res = await fetch("/api/databases/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ databaseId: db.id }),
+      });
+      const j = (await res.json()) as { ok?: boolean; message?: string; latencyMs?: number; backend?: string };
+      showToast(j.message ?? (j.ok ? "Connection succeeded" : "Connection failed"));
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Test failed");
+    } finally {
+      setTesting(false);
+    }
   };
 
   const handleScan = async (db: DatabaseConnection) => {
     setScanResult(null);
-    await new Promise((r) => setTimeout(r, 600));
-    const schemas = db.schemas.length;
-    const tables = db.schemas.reduce((n, s) => n + s.tables.length, 0);
-    setScanResult(`${schemas} schemas · ${tables} tables`);
-    showToast(`Scanned ${db.name}: ${schemas} schemas, ${tables} tables`);
+    try {
+      const res = await fetch(`/api/databases/${db.id}/scan`, { method: "POST" });
+      const j = (await res.json()) as { schemas: number; tables: number };
+      if (!res.ok) throw new Error((j as unknown as { message?: string }).message ?? "Scan failed");
+      setScanResult(`${j.schemas} schemas · ${j.tables} tables`);
+      showToast(`Scanned ${db.name}: ${j.schemas} schemas, ${j.tables} tables`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Scan failed");
+    }
     window.setTimeout(() => setScanResult(null), 3000);
   };
 
@@ -300,7 +274,7 @@ export default function DatabaseListPage() {
     setEditorOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editing) return;
     if (!editing.name.trim()) {
       showToast("Database name is required");
@@ -310,41 +284,68 @@ export default function DatabaseListPage() {
       showToast("SQLAlchemy URI is required");
       return;
     }
-    const now = new Date().toISOString();
-    const saved: DatabaseConnection = {
-      ...editing,
-      id: isNew
-        ? editing.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "_")
-            .slice(0, 24) || `db_${Date.now()}`
-        : editing.id,
-      name: editing.name.trim(),
-      sqlalchemyUri: editing.sqlalchemyUri.trim(),
-      modified: now,
-      modifiedBy: { id: 1, name: "Akmal Hazriq" },
-    };
-    if (isNew) {
-      setLocalRows((prev) => {
-        const base = prev ?? seedDatabases;
-        // avoid duplicate id
-        if (base.some((d) => d.id === saved.id))
-          saved.id = `${saved.id}_${Date.now().toString(36).slice(-4)}`;
-        return [saved, ...base];
-      });
-      setTotal((t) => t + 1);
-      setPage(1);
-      showToast(`Database "${saved.name}" created`);
-    } else {
-      setRows((prev) => prev.map((d) => (d.id === saved.id ? saved : d)));
-      setLocalRows((prev) => {
-        const base = prev ?? seedDatabases;
-        return base.map((d) => (d.id === saved.id ? saved : d));
-      });
-      showToast(`Database "${saved.name}" saved`);
+    setSaving(true);
+    try {
+      const payload = {
+        name: editing.name.trim(),
+        backend: editing.backend,
+        sqlalchemyUri: editing.sqlalchemyUri.trim(),
+        serverCert: editing.serverCert,
+        extraParams: editing.extraParams,
+        impersonateUser: editing.impersonateUser,
+        exposedInSqlLab: editing.exposedInSqlLab,
+        allowDML: editing.allowDML,
+        allowCTA: editing.allowCTA,
+        allowCsvUpload: editing.allowCsvUpload,
+        allowRunSync: editing.allowRunSync,
+        secureExtra: editing.secureExtra,
+        encryptedExtra: editing.encryptedExtra,
+        cacheEnabled: editing.cacheEnabled,
+        cacheTimeout: editing.cacheTimeout,
+        asyncExecution: editing.asyncExecution,
+        concurrency: editing.concurrency,
+        forceSqlLab: editing.forceSqlLab,
+        templateParams: editing.templateParams,
+        queryTimeout: editing.queryTimeout,
+        maxRows: editing.maxRows,
+        defaultSchema: editing.defaultSchema,
+        defaultLimit: editing.defaultLimit,
+        version: editing.version,
+        schemaCacheEnabled: editing.schemaCacheEnabled,
+        sshTunnelEnabled: editing.sshTunnelEnabled,
+        sshTunnelHost: editing.sshTunnelHost,
+        sshTunnelPort: editing.sshTunnelPort,
+        schemas: editing.schemas,
+      };
+      let res: Response;
+      if (isNew) {
+        res = await fetch("/api/databases", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(isNew ? payload : { ...payload, id: editing.id }),
+        });
+      } else {
+        res = await fetch(`/api/databases/${editing.id}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Save failed (${res.status})`);
+      }
+      const j = (await res.json()) as { name?: string };
+      showToast(isNew ? `Database "${j.name ?? payload.name}" created` : `Database "${j.name ?? payload.name}" saved`);
+      setEditorOpen(false);
+      setEditing(null);
+      if (isNew) setPage(1);
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
     }
-    setEditorOpen(false);
-    setEditing(null);
   };
 
   return (
@@ -464,16 +465,21 @@ export default function DatabaseListPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => {
-                  const ids = selected;
-                  setLocalRows((prev) => {
-                    const base = prev ?? seedDatabases;
-                    return base.filter((d) => !ids.has(d.id));
-                  });
-                  setRows((prev) => prev.filter((d) => !ids.has(d.id)));
-                  setTotal((t) => Math.max(0, t - ids.size));
+                onClick={async () => {
+                  const ids = [...selected];
+                  let ok = 0;
+                  let lastErr = "";
+                  for (const delId of ids) {
+                    const res = await fetch(`/api/databases/${delId}`, { method: "DELETE" });
+                    if (res.ok) ok += 1;
+                    else {
+                      const j = await res.json().catch(() => null);
+                      lastErr = (j as { statusMessage?: string })?.statusMessage ?? "";
+                    }
+                  }
                   setSelected(new Set());
-                  showToast(`${ids.size} databases deleted`);
+                  setReloadKey((k) => k + 1);
+                  showToast(ok ? `${ok} databases deleted` : lastErr || "Delete failed");
                 }}
               >
                 <Trash2 className="mr-1 h-3 w-3" />
@@ -688,10 +694,10 @@ export default function DatabaseListPage() {
                       <td className="hidden px-2 py-2.5 md:table-cell">
                         <div className="flex items-center gap-2">
                           <span className="bg-secondary text-secondary-foreground grid h-6 w-6 place-items-center rounded-full text-[10px] font-medium">
-                            {initials(d.modifiedBy.name)}
+                            {initials(d.modifiedBy?.name ?? "Sample")}
                           </span>
                           <div className="leading-tight">
-                            <div className="text-xs">{d.modifiedBy.name}</div>
+                            <div className="text-xs">{d.modifiedBy?.name ?? "Sample"}</div>
                             <div className="text-muted-foreground text-[11px]">
                               {formatDate(d.modified)}
                             </div>
@@ -815,11 +821,8 @@ export default function DatabaseListPage() {
         </div>
 
         <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
-          Data layer: <code className="bg-muted rounded px-1 py-0.5">src/data/databases.ts</code>{" "}
-          (canonical) +{" "}
-          <code className="bg-muted rounded px-1 py-0.5">routes/api/databases/index.get.ts</code> —
-          same source <code className="bg-muted rounded px-1 py-0.5">src/data/sqllab.ts</code>{" "}
-          projects for SQL Lab. Mutations run client-side until a store is chosen.
+          Data via <code className="bg-muted rounded px-1 py-0.5">/api/databases</code> —
+          Postgres + Drizzle.
         </p>
       </div>
 
@@ -1141,7 +1144,7 @@ export default function DatabaseListPage() {
                   <label className="space-y-1.5">
                     <span className="text-xs font-medium">Owners (comma-separated)</span>
                     <Input
-                      value={editing.owners.map((o) => o.name).join(", ")}
+                      value={editing.owners.map((o) => (o as {name?: string})?.name ?? "Sample").join(", ")}
                       onChange={(e) =>
                         setEditing({
                           ...editing,
@@ -1152,7 +1155,7 @@ export default function DatabaseListPage() {
                             .map((name, i) => ({ id: i + 1, name })),
                         })
                       }
-                      placeholder="Akmal Hazriq, Mira Chen"
+                      placeholder="Admin User, Data Analyst"
                     />
                     <span className="text-muted-foreground text-[11px]">
                       Placeholder — in spec, owners gate visibility and row-level security.
@@ -1265,21 +1268,35 @@ export default function DatabaseListPage() {
                 disabled={testing}
                 onClick={async () => {
                   if (!editing) return;
+                  if (!editing.sqlalchemyUri.trim()) {
+                    showToast("Test connection — missing URI");
+                    return;
+                  }
                   setTesting(true);
-                  await new Promise((r) => setTimeout(r, 700));
-                  setTesting(false);
-                  showToast(
-                    editing.sqlalchemyUri.trim()
-                      ? "Test connection — success (placeholder)"
-                      : "Test connection — missing URI",
-                  );
+                  try {
+                    const res = await fetch("/api/databases/test", {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify(
+                        isNew
+                          ? { backend: editing.backend, sqlalchemyUri: editing.sqlalchemyUri }
+                          : { databaseId: editing.id },
+                      ),
+                    });
+                    const j = (await res.json()) as { message?: string; ok?: boolean };
+                    showToast(j.message ?? (j.ok ? "Connection succeeded" : "Test failed"));
+                  } catch (e) {
+                    showToast(e instanceof Error ? e.message : "Test failed");
+                  } finally {
+                    setTesting(false);
+                  }
                 }}
               >
                 <PlugZap className="mr-1.5 h-3.5 w-3.5" />
                 {testing ? "Testing…" : "Test connection"}
               </Button>
-              <Button size="sm" onClick={handleSave} className="ml-auto">
-                {isNew ? "Create database" : "Save changes"}
+              <Button size="sm" onClick={handleSave} className="ml-auto" disabled={saving}>
+                {saving ? "Saving…" : isNew ? "Create database" : "Save changes"}
               </Button>
             </div>
           </div>

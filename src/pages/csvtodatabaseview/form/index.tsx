@@ -17,7 +17,8 @@ import {
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { seedDatabases } from "@/data/databases";
+import { fetchList } from "@/lib/api";
+import type { DatabaseConnection } from "@/types/database";
 
 type Parsed = { headers: string[]; rows: string[][]; truncated: boolean };
 
@@ -129,8 +130,10 @@ export default function UploadFormPage() {
   const [dataframeIndex, setDataframeIndex] = useState(false);
 
   // Target
-  const [databaseId, setDatabaseId] = useState(seedDatabases[0]?.id ?? "analytics");
-  const [schema, setSchema] = useState(seedDatabases[0]?.schemas[0]?.name ?? "public");
+  const [databaseId, setDatabaseId] = useState("analytics");
+  const [schema, setSchema] = useState("public");
+  const [liveDbs, setLiveDbs] = useState<DatabaseConnection[]>([]);
+  const [dbsLoading, setDbsLoading] = useState(true);
   const [tableName, setTableName] = useState("");
 
   const [importing, setImporting] = useState(false);
@@ -141,18 +144,33 @@ export default function UploadFormPage() {
     columns: string[];
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-
-  const db = seedDatabases.find((d) => d.id === databaseId) ?? seedDatabases[0]!;
-  // Keep schema in sync when database changes
   useEffect(() => {
-    const first = seedDatabases.find((d) => d.id === databaseId)?.schemas[0]?.name;
-    if (
-      first &&
-      !seedDatabases.find((d) => d.id === databaseId)?.schemas.some((s) => s.name === schema)
-    ) {
-      setSchema(first);
+    let cancelled = false;
+    async function loadDbs() {
+      setDbsLoading(true);
+      try {
+        const res = await fetchList<DatabaseConnection>("/api/databases", { page: 1, pageSize: 50 });
+        if (cancelled) return;
+        setLiveDbs(res.data);
+        if (res.data.length && !res.data.find((d) => d.id === databaseId)) {
+          setDatabaseId(res.data[0].id);
+          setSchema(res.data[0].schemas[0]?.name ?? "public");
+        } else if (res.data.length) {
+          const cur = res.data.find((d) => d.id === databaseId);
+          if (cur && !cur.schemas.some((s) => s.name === schema)) setSchema(cur.schemas[0]?.name ?? "public");
+        }
+      } catch {
+        if (!cancelled) setLiveDbs([]);
+      } finally {
+        if (!cancelled) setDbsLoading(false);
+      }
     }
-  }, [databaseId, schema]);
+    void loadDbs();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const db = liveDbs.find((d) => d.id === databaseId) ?? liveDbs[0] ?? ({ id: "analytics", name: "Analytics", schemas: [{ name: "public", tables: [] }] } as unknown as DatabaseConnection);
+  // Keep schema in sync when database changes (now handled in loadDbs effect)
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -290,9 +308,6 @@ export default function UploadFormPage() {
                 <Upload className="h-4 w-4" />
               </div>
               <h1 className="text-[22px] font-semibold tracking-tight">Upload data</h1>
-              <span className="bg-warning text-warning-foreground rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide">
-                PLACEHOLDER
-              </span>
             </div>
             <p className="text-muted-foreground mt-1 max-w-[62ch] text-sm leading-relaxed">
               Drop a local CSV or Excel file, pick where it lands, preview it for real, then import.
@@ -437,9 +452,10 @@ export default function UploadFormPage() {
                     <select
                       value={databaseId}
                       onChange={(e) => setDatabaseId(e.target.value)}
+                      disabled={dbsLoading}
                       className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
                     >
-                      {seedDatabases.map((d) => (
+                      {dbsLoading ? <option>Loading…</option> : liveDbs.map((d) => (
                         <option key={d.id} value={d.id}>
                           {d.name} · {d.backend}
                           {d.allowCsvUpload ? "" : " (no CSV upload)"}
@@ -641,7 +657,7 @@ export default function UploadFormPage() {
               <p className="text-muted-foreground mt-2 font-mono text-[11px]">
                 Try pasting a tiny sample:{" "}
                 <code className="bg-muted rounded px-1">
-                  id,name,amount{"\n"}1,Mira,129.90{"\n"}2,Jonah,89.00
+                  id,name,amount{"\n"}1,Example,129.90{"\n"}2,Example,89.00
                 </code>
               </p>
             </div>
@@ -703,7 +719,7 @@ export default function UploadFormPage() {
           Preview: real client-side parsing of the dropped file (hand-rolled,
           delimiter/quote-aware). Import:{" "}
           <code className="bg-muted rounded px-1 py-0.5">POST /api/uploads</code> mutates the
-          canonical <code className="bg-muted rounded px-1 py-0.5">seedDatabases</code> in-memory —
+          live <code className="bg-muted rounded px-1 py-0.5">/api/databases</code> —
           new table then appears in{" "}
           <Link to="/databaseview/list" className="underline-offset-2 hover:underline">
             Database Editor schema list

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   BarChart3,
@@ -17,12 +17,18 @@ import {
   X,
   Layers,
   Palette,
+  Sparkles,
+  MessageSquare,
+  Send,
+  Loader2,
 } from "lucide-react";
+
+import type { ConverseResponse } from "@/types/ai";
 
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { seedDatasets } from "@/data/datasets";
+import { ApiError, fetchList } from "@/lib/api";
 import type { ChartVizType } from "@/types/chart";
 import type { Dataset } from "@/types/dataset";
 
@@ -173,13 +179,39 @@ function buildSql(
 
 export default function ExplorePage() {
   const navigate = useNavigate();
-  const [datasetId, setDatasetId] = useState<number>(seedDatasets[0]?.id ?? 1);
-  const ds = useMemo(
-    () => seedDatasets.find((d) => d.id === datasetId) ?? seedDatasets[0]!,
-    [datasetId],
-  );
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [datasetsLoading, setDatasetsLoading] = useState(true);
+  const [datasetsError, setDatasetsError] = useState<string | null>(null);
+  const [datasetId, setDatasetId] = useState<number | null>(null);
+  const ds = useMemo(() => {
+    if (!datasets.length) return null as unknown as Dataset;
+    return datasets.find((d) => d.id === datasetId) ?? datasets[0]!;
+  }, [datasets, datasetId]);
 
-  const groupableCols = useMemo(() => ds.columns.filter((c) => c.groupable), [ds]);
+  useEffect(() => {
+    let cancelled = false;
+    setDatasetsLoading(true);
+    setDatasetsError(null);
+    fetchList<Dataset>("/api/datasets", { page: 1, pageSize: 50 })
+      .then((res) => {
+        if (cancelled) return;
+        setDatasets(res.data);
+        if (res.data.length && datasetId == null) setDatasetId(res.data[0].id);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Failed to load datasets";
+        setDatasetsError(msg);
+      })
+      .finally(() => {
+        if (!cancelled) setDatasetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const groupableCols = useMemo(() => (ds ? ds.columns.filter((c) => c.groupable) : []), [ds]);
   const [vizType, setVizType] = useState<ExploreViz>("Bar");
   const [dimension, setDimension] = useState<string | null>(() => groupableCols[0]?.name ?? null);
   const [metricName, setMetricName] = useState<string | null>(() => ds.metrics[0]?.name ?? null);
@@ -188,6 +220,16 @@ export default function ExplorePage() {
   const [activeTab, setActiveTab] = useState<"Data" | "Customize" | "Query" | "Results">("Data");
   const [showLegend, setShowLegend] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
+
+  // — Conversational BI (Explore) — copilot panel, never auto-applies; session only
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiInput, setAiInput] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiExchanges, setAiExchanges] = useState<
+    { id: number; prompt: string; response: ConverseResponse }[]
+  >([]);
+  const aiScrollRef = useRef<HTMLDivElement>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveName, setSaveName] = useState("");
@@ -199,11 +241,131 @@ export default function ExplorePage() {
     window.setTimeout(() => setToast(null), 2600);
   };
 
+  // Hydrate from ?chartId= (Chart List → Explore) — fetch real chart and populate vizType/datasetId from live datasets.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("chartId") ?? params.get("chart");
+    const id = raw ? Number(raw) : NaN;
+    if (!Number.isFinite(id)) return;
+    let cancelled = false;
+    fetch(`/api/charts/${id}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ data: { id: number; vizType: string; datasetId: number | null; name: string } }>;
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const d = res.data;
+        if (d.vizType) {
+          if ((SUPPORTED as string[]).includes(d.vizType)) setVizType(d.vizType as ExploreViz);
+          else setVizType(d.vizType as ExploreViz);
+        }
+        if (d.datasetId != null) {
+          setDatasetId(d.datasetId);
+          const next = datasets.find((x) => x.id === d.datasetId);
+          if (next) {
+            setDimension(next.columns.find((c) => c.groupable)?.name ?? null);
+            setMetricName(next.metrics[0]?.name ?? null);
+          }
+        }
+        showToast(`Loaded "${d.name}" — review and Save`);
+      })
+      .catch(() => {
+        if (!cancelled) showToast("Could not load chart for ?chartId");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // hydrates once; dataset resolution re-attempts via datasets sync below
+
+  // Keep dimension/metric in sync when live datasets finally arrive after hydration
+  useEffect(() => {
+    if (!datasets.length || datasetId == null) return;
+    const next = datasets.find((x) => x.id === datasetId);
+    if (!next) return;
+    // If dimension/metric still null (hydration happened before datasets loaded), populate
+    if (dimension == null && metricName == null) {
+      setDimension(next.columns.find((c) => c.groupable)?.name ?? null);
+      setMetricName(next.metrics[0]?.name ?? null);
+    }
+  }, [datasets, datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onDatasetChange = (id: number) => {
     setDatasetId(id);
-    const next = seedDatasets.find((d) => d.id === id)!;
+    const next = datasets.find((d) => d.id === id);
+    if (!next) return;
     setDimension(next.columns.find((c) => c.groupable)?.name ?? null);
     setMetricName(next.metrics[0]?.name ?? null);
+  };
+
+  const sendAi = async (override?: string) => {
+    const msg = (override ?? aiInput).trim();
+    if (!msg || aiBusy || !ds) return;
+    setAiBusy(true);
+    setAiError(null);
+    try {
+      const res = await fetch("/api/ai/converse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: msg,
+          context: {
+            surface: "explore",
+            datasetId: ds.id,
+            vizType,
+            currentQuery: sql ?? "",
+          },
+        }),
+      });
+      const data = (await res.json()) as ConverseResponse & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setAiExchanges((prev) => [...prev.slice(-3), { id: Date.now(), prompt: msg, response: data }]);
+      setAiInput("");
+      requestAnimationFrame(() => aiScrollRef.current?.scrollTo({ top: 99999, behavior: "smooth" }));
+    } catch (e: unknown) {
+      setAiError(e instanceof Error ? e.message : "Couldn’t reach the assistant");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const applyExchange = (ex: { prompt: string; response: ConverseResponse }) => {
+    const a = ex.response.action;
+    if (!a) {
+      showToast("Nothing to apply — this was an explanation.");
+      return;
+    }
+    if (a.type === "modify_chart") {
+      if (a.payload.vizType) {
+        const v = a.payload.vizType as ExploreViz;
+        if ((SUPPORTED as string[]).includes(v)) setVizType(v);
+        else showToast(`${v} is deferred — shown as preview only`);
+      }
+      if (a.payload.dimensions?.[0]) setDimension(a.payload.dimensions[0]);
+      if (a.payload.metrics?.[0]) setMetricName(a.payload.metrics[0]);
+      showToast("Applied to chart — review the preview");
+    } else if (a.type === "filter") {
+      const f = a.payload.filters?.[0];
+      if (f) {
+        setFilterText(`${f.column} = ${f.value}`);
+        showToast(`Filter applied: ${f.column} = ${f.value}`);
+      }
+    } else if (a.type === "generate_chart") {
+      const cfg = a.payload.chartConfig;
+      if (cfg) {
+        if ((SUPPORTED as string[]).includes(cfg.vizType)) setVizType(cfg.vizType as ExploreViz);
+        if (cfg.dimension) setDimension(cfg.dimension);
+        if (cfg.metric) setMetricName(cfg.metric);
+        if (cfg.datasetId !== ds.id) {
+          const target = datasets.find((d) => d.id === cfg.datasetId);
+          if (target) onDatasetChange(target.id);
+        }
+        showToast("Generated chart applied — inspect the preview");
+      }
+    } else {
+      showToast("Explanation — no chart change to apply");
+    }
   };
 
   const {
@@ -211,23 +373,29 @@ export default function ExplorePage() {
     bigNumber,
     metricLabel,
   } = useMemo(
-    () => aggregateForChart(ds, dimension, metricName, rowLimit),
+    () => (ds ? aggregateForChart(ds, dimension, metricName, rowLimit) : { rows: [] as { label: string; value: number }[], bigNumber: null, metricLabel: "—" }),
     [ds, dimension, metricName, rowLimit],
   );
 
   const filteredRows = useMemo(() => {
+    if (!ds) return [];
     if (!filterText.trim()) return ds.sampleRows ?? [];
     const q = filterText.toLowerCase();
     return (ds.sampleRows ?? []).filter((r) => JSON.stringify(r).toLowerCase().includes(q));
   }, [ds, filterText]);
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- AI panel captures `sql` forward; compiler can't prove memo stability
   const sql = useMemo(
-    () => buildSql(ds, dimension, metricName, rowLimit),
+    () => (ds ? buildSql(ds, dimension, metricName, rowLimit) : "-- loading dataset…"),
     [ds, dimension, metricName, rowLimit],
   );
-  const selectedMetric = ds.metrics.find((m) => m.name === metricName) ?? null;
+  const selectedMetric = ds ? (ds.metrics.find((m) => m.name === metricName) ?? null) : null;
 
   const onSave = async () => {
+    if (!ds) {
+      showToast("No dataset loaded — cannot save");
+      return;
+    }
     if (!saveName.trim()) {
       showToast("Chart name is required");
       return;
@@ -281,15 +449,24 @@ export default function ExplorePage() {
               <span className="text-muted-foreground hidden font-medium sm:inline">Dataset</span>
               <div className="relative">
                 <select
-                  value={datasetId}
+                  value={datasetId ?? ""}
                   onChange={(e) => onDatasetChange(Number(e.target.value))}
                   className="border-input bg-background h-8 rounded-md border pr-7 pl-2 text-xs font-medium"
+                  disabled={datasetsLoading || !!datasetsError}
                 >
-                  {seedDatasets.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} · {d.source}
-                    </option>
-                  ))}
+                  {datasetsLoading ? (
+                    <option>Loading…</option>
+                  ) : datasetsError ? (
+                    <option>— error —</option>
+                  ) : datasets.length === 0 ? (
+                    <option>No datasets</option>
+                  ) : (
+                    datasets.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} · {d.source}
+                      </option>
+                    ))
+                  )}
                 </select>
                 <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2" />
               </div>
@@ -315,6 +492,18 @@ export default function ExplorePage() {
             </label>
 
             <div className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setAiOpen((v) => !v)}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${aiOpen ? "border-ai bg-ai text-ai-foreground shadow" : "border-ai-border bg-ai-muted text-ai hover:bg-ai-muted/80"}`}
+                aria-expanded={aiOpen}
+                aria-label="Toggle conversational assistant"
+                title={aiOpen ? "Close assistant" : "Ask about this chart"}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{aiOpen ? "Close AI" : "Ask AI"}</span>
+                <MessageSquare className="hidden h-3 w-3 sm:inline opacity-60" />
+              </button>
               <Button
                 variant="outline"
                 size="sm"
@@ -333,17 +522,21 @@ export default function ExplorePage() {
             </div>
           </div>
           <p className="text-muted-foreground hidden border-t px-4 py-1.5 text-[11px] leading-relaxed sm:block">
-            Preview is a{" "}
-            <span className="font-medium">
-              client-side aggregation of {ds.name}&apos;s sampleRows
-            </span>{" "}
-            ({ds.sampleRows?.length ?? 0} rows) — not a mock image. TanStack Charts renders the same{" "}
-            <code className="bg-muted rounded px-1">ChartRenderer</code> that Dashboard View will
-            reuse.
+            {datasetsError ? (
+              <span className="text-destructive">Failed to load datasets: {datasetsError}</span>
+            ) : datasetsLoading ? (
+              <span>Loading datasets…</span>
+            ) : ds ? (
+              <>
+                Preview is a <span className="font-medium">client-side aggregation of {ds.name}&apos;s sampleRows</span> ({ds.sampleRows?.length ?? 0} rows) — not a mock image. TanStack Charts renders the same <code className="bg-muted rounded px-1">ChartRenderer</code> that Dashboard View will reuse.
+              </>
+            ) : (
+              <span>No dataset available.</span>
+            )}
           </p>
         </div>
 
-        <div className="flex flex-1 flex-col lg:flex-row">
+        <div className="relative flex flex-1 flex-col lg:flex-row">
           <aside className="border-border bg-card w-full shrink-0 border-b lg:w-[280px] lg:border-r lg:border-b-0">
             <div className="space-y-4 p-3 sm:p-4">
               <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-widest uppercase">
@@ -491,18 +684,22 @@ export default function ExplorePage() {
                 </div>
 
                 <div className="border-border bg-muted/30 rounded-md border p-2.5">
-                  <p className="text-xs font-medium">{ds.name}</p>
-                  <p className="text-muted-foreground mt-1 font-mono text-[11px]">
-                    {ds.source} · {ds.type}
-                  </p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    {ds.columns.length} cols · {ds.metrics.length} metrics ·{" "}
-                    {ds.sampleRows?.length ?? 0} sample rows
-                  </p>
-                  <Link
-                    to="/tablemodelview/list"
-                    className="text-primary mt-1 inline-block text-xs hover:underline"
-                  >
+                  {datasetsError ? (
+                    <p className="text-destructive text-xs">Failed to load datasets: {datasetsError}</p>
+                  ) : datasetsLoading ? (
+                    <p className="text-muted-foreground text-xs">Loading dataset…</p>
+                  ) : ds ? (
+                    <>
+                      <p className="text-xs font-medium">{ds.name}</p>
+                      <p className="text-muted-foreground mt-1 font-mono text-[11px]">{ds.source} · {ds.type}</p>
+                      <p className="text-muted-foreground mt-1 text-[11px]">
+                        {ds.columns.length} cols · {ds.metrics.length} metrics · {ds.sampleRows?.length ?? 0} sample rows
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-muted-foreground text-xs">No dataset</p>
+                  )}
+                  <Link to="/tablemodelview/list" className="text-primary mt-1 inline-block text-xs hover:underline">
                     Edit dataset →
                   </Link>
                 </div>
@@ -516,19 +713,27 @@ export default function ExplorePage() {
               <span className="text-xs font-semibold tracking-wide">Preview</span>
               <span className="bg-border hidden h-3 w-px sm:inline-block" />
               <span className="text-muted-foreground hidden text-xs sm:inline">
-                {ds.name} · {vizType} {dimension ? `by ${dimension}` : "(total)"} · {metricLabel}
-                {filterText ? ` · filtered` : ""} ·{" "}
-                <span className="font-mono text-[11px]">ChartRenderer</span>
+                {datasetsLoading ? "Loading dataset…" : datasetsError ? "— error —" : ds ? `${ds.name} · ${vizType} ${dimension ? `by ${dimension}` : "(total)"} · ${metricLabel}${filterText ? ` · filtered` : ""}` : "No dataset"} · <span className="font-mono text-[11px]">ChartRenderer</span>
               </span>
-              <Link
-                to="/chart/list"
-                className="text-primary ml-auto hidden text-xs hover:underline sm:inline"
-              >
+              <Link to="/chart/list" className="text-primary ml-auto hidden text-xs hover:underline sm:inline">
                 Chart List →
               </Link>
             </div>
 
             <div className="p-3 sm:p-4">
+              {datasetsLoading ? (
+                <div className="border-border bg-card grid h-[360px] place-items-center rounded-lg border sm:h-[400px]">
+                  <p className="text-muted-foreground text-xs">Loading dataset…</p>
+                </div>
+              ) : datasetsError ? (
+                <div className="border-destructive/30 bg-destructive/10 grid h-[360px] place-items-center rounded-lg border p-4 text-center sm:h-[400px]">
+                  <p className="text-destructive text-xs">Failed to load dataset: {datasetsError}</p>
+                </div>
+              ) : !ds ? (
+                <div className="border-border bg-card grid h-[360px] place-items-center rounded-lg border p-4 text-center sm:h-[400px]">
+                  <p className="text-muted-foreground text-xs">No dataset available.</p>
+                </div>
+              ) : (
               <div className="border-border bg-card min-h-[360px] overflow-hidden rounded-lg border shadow-sm">
                 <Suspense
                   fallback={
@@ -551,37 +756,22 @@ export default function ExplorePage() {
                   />
                 </Suspense>
                 <div className="border-border bg-muted/20 flex flex-wrap items-center gap-2 border-t px-3 py-2 text-[11px]">
-                  <span className="bg-muted rounded-full px-2 py-0.5 font-mono text-xs">
-                    {ds.name}
-                  </span>
+                  <span className="bg-muted rounded-full px-2 py-0.5 font-mono text-xs">{ds.name}</span>
                   <span className="bg-border hidden h-3 w-px sm:inline-block" />
                   <span className="text-muted-foreground">
                     {vizType === "Table" || vizType === "Big Number"
                       ? `${ds.sampleRows?.length ?? 0} sample rows`
                       : `${chartRows.length} bucket${chartRows.length === 1 ? "" : "s"} · ${ds.sampleRows?.length ?? 0} sample rows`}{" "}
-                    · from <code className="bg-muted rounded px-1">{ds.source}</code> · TanStack{" "}
-                    <code className="bg-muted rounded px-1">ChartRenderer</code>
+                    · from <code className="bg-muted rounded px-1">{ds.source}</code> · TanStack <code className="bg-muted rounded px-1">ChartRenderer</code>
                   </span>
                 </div>
               </div>
+              )}
 
               <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
-                Preview runs in the browser against{" "}
-                <code className="bg-muted rounded px-1">sampleRows</code>{" "}
-                (DatasetColumn/DatasetMetric from{" "}
-                <code className="bg-muted rounded px-1">src/types/dataset.ts</code>) and{" "}
-                <code className="bg-muted rounded px-1">
-                  src/components/charts/ChartRenderer.tsx
-                </code>
-                . TanStack chunk is lazy-loaded via{" "}
-                <code className="bg-muted rounded px-1">React.lazy</code>/
-                <code className="bg-muted rounded px-1">Suspense</code> so it doesn&apos;t bloat the
-                initial page load.
+                Preview runs in the browser against <code className="bg-muted rounded px-1">sampleRows</code> (DatasetColumn/DatasetMetric from <code className="bg-muted rounded px-1">src/types/dataset.ts</code>) and <code className="bg-muted rounded px-1">src/components/charts/ChartRenderer.tsx</code>. TanStack chunk is lazy-loaded via <code className="bg-muted rounded px-1">React.lazy</code>/<code className="bg-muted rounded px-1">Suspense</code> so it doesn&apos;t bloat the initial page load.
                 {bigNumber != null && vizType !== "Table" && vizType !== "Big Number" && (
-                  <span className="font-mono text-[11px]">
-                    {" "}
-                    · total {metricLabel}: {formatNumber(bigNumber, selectedMetric?.d3Format)}
-                  </span>
+                  <span className="font-mono text-[11px]"> · total {metricLabel}: {formatNumber(bigNumber, selectedMetric?.d3Format)}</span>
                 )}
               </p>
             </div>
@@ -614,11 +804,19 @@ export default function ExplorePage() {
                   <div className="space-y-1.5">
                     <p className="text-xs font-semibold tracking-wide">Dataset</p>
                     <div className="border-border bg-muted/30 rounded-md border p-2.5">
-                      <p className="text-xs font-medium">{ds.name}</p>
-                      <p className="text-muted-foreground font-mono text-[11px]">{ds.source}</p>
-                      <p className="text-muted-foreground mt-1 text-[11px]">
-                        {ds.description ?? "—"}
-                      </p>
+                      {datasetsLoading ? (
+                        <p className="text-muted-foreground text-xs">Loading…</p>
+                      ) : datasetsError ? (
+                        <p className="text-destructive text-xs">{datasetsError}</p>
+                      ) : ds ? (
+                        <>
+                          <p className="text-xs font-medium">{ds.name}</p>
+                          <p className="text-muted-foreground font-mono text-[11px]">{ds.source}</p>
+                          <p className="text-muted-foreground mt-1 text-[11px]">{ds.description ?? "—"}</p>
+                        </>
+                      ) : (
+                        <p className="text-muted-foreground text-xs">No dataset</p>
+                      )}
                     </div>
                   </div>
                   <div className="space-y-1.5">
@@ -857,6 +1055,181 @@ export default function ExplorePage() {
               )}
             </div>
           </aside>
+
+          {/* Conversational copilot — right slide-over on lg, bottom sheet on mobile */}
+          {aiOpen && (
+            <>
+              <button
+                type="button"
+                aria-label="Close assistant"
+                onClick={() => setAiOpen(false)}
+                className="absolute inset-0 z-30 bg-black/20 backdrop-blur-[1px] lg:bg-black/10"
+              />
+              <div className="absolute inset-x-0 bottom-0 z-30 flex max-h-[72vh] flex-col rounded-t-xl border-t bg-card shadow-2xl lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[380px] lg:max-h-none lg:rounded-none lg:border-t-0 lg:border-l">
+                <div className="flex items-center gap-2 border-b px-3 py-2.5">
+                  <span className="bg-ai text-ai-foreground grid h-7 w-7 place-items-center rounded-md">
+                    <Sparkles className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold tracking-tight">Ask about this chart</p>
+                    <p className="text-muted-foreground text-[11px] leading-none">
+                      Copilot — suggests, never auto-applies
+                    </p>
+                  </div>
+                  <span className="bg-ai-muted border-ai-border hidden rounded-full border px-2 py-0.5 font-mono text-[10px] tracking-wide sm:inline">
+                    MOCK · template + real schema
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAiOpen(false)}
+                    className="text-muted-foreground hover:text-foreground grid h-7 w-7 place-items-center rounded-md"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div ref={aiScrollRef} className="flex-1 overflow-auto p-3 sm:p-4">
+                  <div className="space-y-3">
+                    {aiExchanges.length === 0 && !aiBusy && (
+                      <div className="border-ai-border bg-ai-muted/40 rounded-lg border border-dashed p-3">
+                        <p className="text-xs font-medium">Try asking</p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {[
+                            "make it a line chart",
+                            "filter to published orders only",
+                            "break down by region",
+                            "show me revenue by status",
+                          ].map((s) => (
+                            <button
+                              key={s}
+                              type="button"
+                              onClick={() => sendAi(s)}
+                              className="border-ai-border bg-card hover:bg-ai-muted rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                            >
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
+                          The assistant reads <code className="bg-card rounded border px-1">Dataset</code> ·{" "}
+                          <code className="bg-card rounded border px-1">{ds.source}</code> and replies with a
+                          reviewable action + the exact SQL. Hit <span className="font-medium">Apply</span> to
+                          mutate the chart — nothing changes until you do.
+                        </p>
+                      </div>
+                    )}
+
+                    {aiExchanges.slice(-4).map((ex) => {
+                      const r = ex.response;
+                      const actionLabel = r.action
+                        ? r.action.type === "modify_chart"
+                          ? `Propose: switch to ${r.action.payload.vizType ?? r.action.payload.dimensions?.[0] ?? "modified"}`
+                          : r.action.type === "filter"
+                            ? `Propose: filter ${r.action.payload.filters?.[0]?.column} = ${r.action.payload.filters?.[0]?.value}`
+                            : r.action.type === "generate_chart"
+                              ? `Propose: ${r.action.payload.chartConfig?.vizType} of ${r.action.payload.chartConfig?.metric} by ${r.action.payload.chartConfig?.dimension}`
+                              : r.action.type
+                        : "No action — explanation";
+                      const tables = r.tablesUsed?.join(", ") ?? "—";
+                      return (
+                        <div key={ex.id} className="border-border bg-card overflow-hidden rounded-lg border shadow-sm">
+                          <div className="bg-muted/30 border-b px-3 py-2">
+                            <p className="text-xs font-medium">You → {ex.prompt}</p>
+                          </div>
+                          <div className="space-y-2 p-3">
+                            <p
+                              className="text-xs leading-relaxed"
+                              dangerouslySetInnerHTML={{
+                                __html: r.reply
+                                  .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+                                  .replace(/`([^`]+)`/g, '<code class="bg-muted rounded px-1 font-mono text-[11px]">$1</code>'),
+                              }}
+                            />
+                            <div className="bg-ai-muted border-ai-border flex flex-wrap items-center gap-1.5 rounded-md border px-2 py-1.5">
+                              <span className="text-ai text-[11px] font-semibold">{actionLabel}</span>
+                              <span className="bg-ai-border hidden h-3 w-px sm:inline-block" />
+                              <span className="text-muted-foreground font-mono text-[10px]">tables: {tables}</span>
+                            </div>
+                            {r.sql && (
+                              <details className="group">
+                                <summary className="text-muted-foreground hover:text-foreground cursor-pointer list-none text-[11px] font-medium">
+                                  <span className="group-open:hidden">▸ View SQL (inspectable)</span>
+                                  <span className="hidden group-open:inline">▾ Hide SQL</span>
+                                </summary>
+                                <pre className="border-ai-border bg-editor text-editor-foreground mt-1.5 overflow-auto rounded-md border p-2 font-mono text-[11px] leading-relaxed">
+                                  {r.sql}
+                                </pre>
+                              </details>
+                            )}
+                            <div className="flex gap-1.5 pt-1">
+                              <Button size="sm" className="bg-ai text-ai-foreground hover:bg-ai/90 h-7 text-xs" onClick={() => applyExchange(ex)} disabled={!r.action}>
+                                Apply
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 text-xs"
+                                onClick={() => setAiExchanges((prev) => prev.filter((p) => p.id !== ex.id))}
+                              >
+                                Dismiss
+                              </Button>
+                              <span className="text-muted-foreground ml-auto self-center hidden text-[10px] sm:inline">
+                                Not auto-applied — explicit confirm required
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {aiBusy && (
+                      <div className="border-ai-border bg-ai-muted/30 flex items-center gap-2 rounded-lg border p-3 text-xs">
+                        <Loader2 className="text-ai h-4 w-4 animate-spin" />
+                        Thinking — reading {ds.name} schema…
+                      </div>
+                    )}
+                    {aiError && (
+                      <div className="border-destructive/30 bg-destructive/10 rounded-lg border p-3 text-xs text-destructive">
+                        {aiError}
+                      </div>
+                    )}
+                    {aiExchanges.length > 4 && (
+                      <p className="text-muted-foreground text-center text-[11px]">Showing the 4 most recent exchanges.</p>
+                    )}
+                  </div>
+                  <p className="text-muted-foreground mt-4 text-center text-[11px]">
+                    This panel and the “Ask AI” NL2SQL bar in SQL Lab are separate surfaces — both use the same
+                    server-side mock (<code className="bg-muted rounded px-1">x-mock-ai: 1</code>) but different
+                    prompts and context.
+                  </p>
+                </div>
+
+                <div className="border-t bg-card p-3">
+                  <div className="flex gap-2">
+                    <Input
+                      value={aiInput}
+                      onChange={(e) => setAiInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          sendAi();
+                        }
+                      }}
+                      placeholder="Ask about this chart…"
+                      className="h-9 flex-1 text-xs"
+                      disabled={aiBusy}
+                    />
+                    <Button size="sm" className="bg-ai text-ai-foreground hover:bg-ai/90 h-9 px-3" onClick={() => sendAi()} disabled={aiBusy || !aiInput.trim()}>
+                      <Send className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground mt-1.5 text-[11px]">
+                    Enter to send · suggestions never rewrite the chart until you press Apply
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {showSave && (
@@ -873,11 +1246,7 @@ export default function ExplorePage() {
                 </button>
               </div>
               <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
-                This writes into <code className="bg-muted rounded px-1">seedCharts</code> (
-                <code className="bg-muted rounded px-1">src/data/charts.ts</code>) via{" "}
-                <code className="bg-muted rounded px-1">POST /api/charts</code> — so it appears in
-                Chart List immediately. Same <code className="bg-muted rounded px-1">Chart</code>{" "}
-                contract Chart List already reads.
+                This writes to <code className="bg-muted rounded px-1">POST /api/charts</code> (Postgres via Drizzle) — so it appears in Chart List immediately. Same <code className="bg-muted rounded px-1">Chart</code> contract Chart List already reads.
               </p>
               <div className="mt-4 space-y-3">
                 <label className="space-y-1.5">
@@ -900,8 +1269,7 @@ export default function ExplorePage() {
                   />
                 </label>
                 <div className="bg-muted/40 rounded-md px-3 py-2 font-mono text-[11px] leading-relaxed">
-                  dataset <span className="font-semibold">{ds.name}</span> · {ds.source} · {vizType}{" "}
-                  · {dimension ?? "(no dim)"} / {metricLabel}
+                  dataset <span className="font-semibold">{ds?.name ?? "—"}</span> · {ds?.source ?? "—"} · {vizType} · {dimension ?? "(no dim)"} / {metricLabel}
                 </div>
                 <div className="bg-muted/40 flex items-center gap-2 rounded-md px-3 py-2 text-xs">
                   <span className="text-muted-foreground">Preview buckets</span>

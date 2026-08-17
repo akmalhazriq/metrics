@@ -37,4 +37,5 @@ auto-imports.d.ts
 .eslintrc-auto-import.json
 
 .output
-.nitro
+.nitro.env
+.env

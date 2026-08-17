@@ -47,6 +47,11 @@
   --info-foreground: oklch(0.985 0 0);
   --favorite: oklch(0.82 0.14 85);
   --favorite-foreground: oklch(0.205 0 0);
+  /* AI assist — one quiet accent family for NL2SQL + heal surfaces */
+  --ai: oklch(0.58 0.14 262);
+  --ai-foreground: oklch(0.985 0 0);
+  --ai-muted: oklch(0.96 0.02 262);
+  --ai-border: oklch(0.88 0.06 262);
   /* Code / editor — distinct from table rows for SQL Lab */
   --editor: oklch(0.985 0 0);
   --editor-foreground: oklch(0.145 0 0);
@@ -96,6 +101,10 @@
   --info-foreground: oklch(0.145 0 0);
   --favorite: oklch(0.78 0.13 85);
   --favorite-foreground: oklch(0.145 0 0);
+  --ai: oklch(0.62 0.13 262);
+  --ai-foreground: oklch(0.145 0 0);
+  --ai-muted: oklch(0.22 0.03 262);
+  --ai-border: oklch(0.32 0.05 262);
   --editor: oklch(0.18 0 0);
   --editor-foreground: oklch(0.985 0 0);
   --editor-border: oklch(0.27 0 0);
@@ -148,6 +157,10 @@
   --color-info-foreground: var(--info-foreground);
   --color-favorite: var(--favorite);
   --color-favorite-foreground: var(--favorite-foreground);
+  --color-ai: var(--ai);
+  --color-ai-foreground: var(--ai-foreground);
+  --color-ai-muted: var(--ai-muted);
+  --color-ai-border: var(--ai-border);
   --color-editor: var(--editor);
   --color-editor-foreground: var(--editor-foreground);
   --color-editor-border: var(--editor-border);

@@ -1,27 +1,20 @@
 /**
- * GET /api/dashboards
+ * GET /api/dashboards — Drizzle/Postgres
  *
- * Placeholder data layer — serves `seedDashboards` from `src/data/dashboards.ts`
- * with server-side filtering / sorting / pagination via query params:
- *   ?q=string             title substring (case-insensitive)
- *   ?status=published|draft|archived|all
- *   ?owner=string         substring match against any owner.name
- *   ?tag=string           exact tag match
- *   ?favorite=true|false  boolean filter
- *   ?sortBy=title|modified|status
- *   ?sortDir=asc|desc
- *   ?page=number          1-indexed
- *   ?pageSize=number
- *
- * No persistence — mutations (create / favorite / delete) are client-side only
- * for this phase. Swap this handler for a DB query when a storage decision is made.
+ * Replaces in-memory `seedDashboards`. Joins via separate selects + TS join
+ * (no db.query relations): dashboards → dashboard_owners/users,
+ * dashboard_tags/tags, favorites. Filtering/sorting/pagination after stitch
+ * to preserve exact previous query semantics (q/status/owner/tag/favorite).
  */
 import { defineHandler, getQuery } from "nitro/h3";
 
-import { seedDashboards } from "../../../src/data/dashboards";
+import { db } from "../../../src/db";
+import { dashboardOwners, dashboardTags, dashboards, favorites, tags, users } from "../../../src/db/schema";
 import type { Dashboard } from "../../../src/types/dashboard";
+import { requireAuth } from "../../../src/lib/requireAuth";
 
-export default defineHandler((event) => {
+export default defineHandler(async (event) => {
+  await requireAuth(event);
   const query = getQuery(event) as Record<string, string | undefined>;
 
   const q = (query.q ?? "").toLowerCase().trim();
@@ -34,44 +27,77 @@ export default defineHandler((event) => {
   const page = Math.max(1, Number(query.page ?? 1) || 1);
   const pageSize = Math.min(50, Math.max(1, Number(query.pageSize ?? 10) || 10));
 
-  let filtered = [...seedDashboards];
+  const [rows, allUsers, ownerRows, tagRows, allTags, favRows] = await Promise.all([
+    db.select().from(dashboards),
+    db.select().from(users),
+    db.select().from(dashboardOwners),
+    db.select().from(dashboardTags),
+    db.select().from(tags),
+    db.select().from(favorites),
+  ]);
 
-  if (q) {
-    filtered = filtered.filter((d) => d.title.toLowerCase().includes(q));
+  const userName = new Map(allUsers.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+  const tagById = new Map(allTags.map((t) => [t.id, t.name]));
+
+  const ownersByDashboard = new Map<number, { id: number; name: string }[]>();
+  for (const r of ownerRows) {
+    const arr = ownersByDashboard.get(r.dashboardId) ?? [];
+    arr.push({ id: r.userId, name: userName.get(r.userId) ?? String(r.userId) });
+    ownersByDashboard.set(r.dashboardId, arr);
   }
-  if (status && status !== "all") {
-    filtered = filtered.filter((d) => d.status === status);
+
+  const tagsByDashboard = new Map<number, string[]>();
+  for (const r of tagRows) {
+    const name = tagById.get(r.tagId);
+    if (!name) continue;
+    const arr = tagsByDashboard.get(r.dashboardId) ?? [];
+    arr.push(name);
+    tagsByDashboard.set(r.dashboardId, arr);
   }
-  if (owner) {
-    filtered = filtered.filter((d) => d.owners.some((o) => o.name.toLowerCase().includes(owner)));
-  }
-  if (tag) {
-    filtered = filtered.filter((d) => d.tags.some((t) => t.toLowerCase() === tag));
-  }
+
+  const favSet = new Set<number>();
+  for (const f of favRows) if (f.entityType === "dashboard") favSet.add(f.entityId);
+
+  let data: Dashboard[] = rows.map((r) => {
+    const mId = r.modifiedById ?? r.createdById;
+    const cId = r.createdById ?? r.modifiedById;
+    return {
+    id: r.id,
+    title: r.title,
+    slug: r.slug,
+    status: r.status as Dashboard["status"],
+    modifiedBy: { id: mId ?? 0, name: mId ? (userName.get(mId) ?? "Sample") : "Sample" },
+    modified: (r.modifiedAt ?? r.createdAt).toISOString(),
+    createdBy: { id: cId ?? 0, name: cId ? (userName.get(cId) ?? "Sample") : "Sample" },
+    owners: ownersByDashboard.get(r.id) ?? [],
+    tags: tagsByDashboard.get(r.id) ?? [],
+    favorite: favSet.has(r.id),
+    certified: r.certified ?? false,
+    description: r.description ?? undefined,
+    layout: (r.layout as Dashboard["layout"]) ?? [],
+  };});
+
+  if (q) data = data.filter((d) => d.title.toLowerCase().includes(q));
+  if (status && status !== "all") data = data.filter((d) => d.status === status);
+  if (owner) data = data.filter((d) => d.owners.some((o) => o.name.toLowerCase().includes(owner)));
+  if (tag) data = data.filter((d) => d.tags.some((t) => t.toLowerCase() === tag));
   if (favoriteParam === "true" || favoriteParam === "false") {
     const want = favoriteParam === "true";
-    filtered = filtered.filter((d) => d.favorite === want);
+    data = data.filter((d) => d.favorite === want);
   }
 
-  const sortKey = (["title", "modified", "status"] as const).includes(
-    sortBy as typeof sortBy & string extends string ? string : never,
-  )
-    ? sortBy
-    : "modified";
-
-  filtered.sort((a, b) => {
-    const av = a[sortKey as keyof Dashboard];
-    const bv = b[sortKey as keyof Dashboard];
-    const cmp =
-      typeof av === "string" && typeof bv === "string"
-        ? av.localeCompare(bv)
-        : String(av).localeCompare(String(bv));
+  const allowedSort = new Set(["title", "modified", "status"]);
+  const sortKey = allowedSort.has(sortBy as string) ? (sortBy as keyof Dashboard) : "modified";
+  data.sort((a, b) => {
+    const av = a[sortKey] as string;
+    const bv = b[sortKey] as string;
+    const cmp = String(av).localeCompare(String(bv));
     return sortDir === "asc" ? cmp : -cmp;
   });
 
-  const total = filtered.length;
+  const total = data.length;
   const start = (page - 1) * pageSize;
-  const data = filtered.slice(start, start + pageSize);
+  const sliced = data.slice(start, start + pageSize);
 
-  return { data, total, page, pageSize };
+  return { data: sliced, total, page, pageSize };
 });

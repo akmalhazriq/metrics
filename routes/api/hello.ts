@@ -1,10 +1,10 @@
 import { defineHandler } from "nitro/h3";
+import { requireAuth } from "../../src/lib/requireAuth";
 
-export default defineHandler((event) => {
-  const { name } = event.context.user as { name: string };
-  console.log("🚀 ~ params :", name);
+export default defineHandler(async (event) => {
+  await requireAuth(event);
   return {
     success: true,
-    message: `Hello ${name}`,
+    message: "Hello authenticated",
   };
 });

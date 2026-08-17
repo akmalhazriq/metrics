@@ -1,5 +1,13 @@
 export type DashboardStatus = "published" | "draft" | "archived";
 
+export type DashboardLayoutCell =
+  | { id: string; type: "chart"; chartId: number; span: number }
+  | { id: string; type: "header"; text: string; level?: 1 | 2 | 3; span: number }
+  | { id: string; type: "markdown"; content: string; span: number }
+  | { id: string; type: "divider"; span: number };
+
+export type DashboardLayoutRow = { id: string; cells: DashboardLayoutCell[] };
+
 export interface Dashboard {
   id: number;
   title: string;
@@ -15,6 +23,8 @@ export interface Dashboard {
   /** Optional certification flag (Superset parity) */
   certified?: boolean;
   description?: string;
+  /** Grid layout — 12-col rows. Empty array = blank dashboard (CTA state). */
+  layout?: DashboardLayoutRow[];
 }
 
 export type DashboardListParams = {

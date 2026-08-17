@@ -1,470 +1,76 @@
-# React + TypeScript + Nitro Full-Stack Starter
+# Metrics BI — AI-Native Superset Alternative
 
-A production-ready full-stack starter template combining React 19 with TypeScript on the frontend and Nitro for the backend API. Built with Vite for blazing-fast development and optimized builds.
+AI-native BI platform — real PostgreSQL, conversational analytics, NL-to-SQL, anomaly detection. Built on React 19 + Nitro 3 + Drizzle ORM.
 
-⭐ **Don't forget to star this repo if you find it useful!**
-
----
-
-## Features
-
-### Frontend
-
-- ⚡ **React 19** with TypeScript and Vite
-- 🎨 **Tailwind CSS 4** + **shadcn/ui** components
-- 🗂️ **File-based routing** with `vite-plugin-pages`
-- 🔄 **Auto-imports** for React hooks and components
-- 🖼️ **SVG as React components** with `vite-plugin-svgr`
-- 🔤 **Google Fonts** integration
-- 📦 **Path aliases** (`@/components`, etc.)
-
-### Backend
-
-- 🚀 **Nitro 3** server with H3 handler
-- 🛣️ **File-based API routing** in `/routes`
-- ⚡ **Fast development** with hot module replacement
-- 🔧 **TypeScript** support out of the box
-
-### Developer Experience
-
-- ✅ **ESLint** + **Prettier** configured
-- 🪝 **Husky** pre-commit hooks
-- 🐳 **Docker** setup included
-- 🤖 **Dependabot** for dependency updates
-- 📝 **Workspace settings** for team collaboration
+This is **beta v1.0 (v1.0.0-beta.1)** — every Apache Superset reference page has a working equivalent, backed by real Postgres, with Phase 2 AI surfaces integrated directly into the relevant pages (not a bolted-on chatbot tab).
 
 ---
 
 ## Quick Start
 
+**Prerequisites:** Node 18+, PostgreSQL 14+
+
 ```bash
-# Install dependencies
+git clone <repo>
+cd metrics
 npm install
-
-# Start development server (frontend + backend)
-npm run dev
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
-
-# Lint code
-npm run lint
+cp .env.example .env   # edit DATABASE_URL
+npm run db:push        # create tables (Drizzle Kit — dev, no migration file)
+npm run db:seed        # seed minimal sample data (1 database · 2 datasets · 2 charts · 1 dashboard)
+npm run dev            # start on http://localhost:5000
 ```
 
-The dev server runs on:
+> **First-run note:** On first launch, open http://localhost:5000 — you'll be guided through creating your admin account. The setup screen only appears once (no users exist yet); later users are added from **Govern → Users**.
 
-- **Frontend**: http://localhost:5000
-- **API**: http://localhost:5000/api/\*
+The dev server serves both the React frontend and the Nitro/H3 API on the same origin (`/api/*` via the `nitro()` Vite plugin). Production builds via `npm run build` (TS check + Vite); Docker stage serves `dist/` via nginx, PM2 alternative via `ecosystem.config.js`.
 
 ---
 
-## Client-Side Routing (Frontend)
+## Features
 
-### File-Based Routing with vite-plugin-pages
-
-Routes are automatically generated from files in `src/pages/`. Each `.tsx` file becomes a route.
-
-**Documentation**: [vite-plugin-pages](https://github.com/hannoeru/vite-plugin-pages)
-
-### Route Structure
-
-```
-src/pages/
-├── index.tsx           → /
-├── about.tsx           → /about
-├── users/
-│   ├── index.tsx       → /users
-│   ├── [id].tsx        → /users/:id (dynamic route)
-│   └── profile.tsx     → /users/profile
-└── [...all].tsx        → /* (catch-all/404)
-```
-
-### Creating Pages
-
-All page components must use **default exports**:
-
-```tsx
-// src/pages/about.tsx
-const About = () => {
-  return (
-    <div>
-      <h1>About Page</h1>
-    </div>
-  );
-};
-
-export default About;
-```
-
-### Dynamic Routes
-
-Use square brackets for dynamic segments:
-
-```tsx
-// src/pages/users/[id].tsx
-const UserDetail = () => {
-  const { id } = useParams(); // auto-imported from react-router
-
-  return (
-    <div>
-      <h1>User ID: {id}</h1>
-    </div>
-  );
-};
-
-export default UserDetail;
-```
-
-### Catch-All Routes
-
-Use `[...all].tsx` for 404 pages or catch-all routes:
-
-```tsx
-// src/pages/[...all].tsx or NotFound.tsx
-const NotFound = () => {
-  return (
-    <div>
-      <h1>404 - Page Not Found</h1>
-    </div>
-  );
-};
-
-export default NotFound;
-```
-
-### Navigation
-
-Use React Router hooks (auto-imported):
-
-```tsx
-const MyComponent = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  return <button onClick={() => navigate("/about")}>Go to About</button>;
-};
-```
+- **Dashboard Builder** — 12-col grid (header/markdown/divider/chart), cross-filtering (click a bar to filter other charts), drill-to-detail (right-click / header icon → row-level modal with pagination)
+- **Chart Explore** — TanStack Charts (Bar `barY`, Line `lineY+dot`, Area `areaY`, Scatter `dot`, Heatmap `rect`, Box `boxY` + Table/Big Number), client-side aggregation of `sampleRows`, Save via `POST /api/charts`
+- **SQL Lab** — real Postgres execution via shared `pg` Pool (READ ONLY, `statement_timeout 10s`), table tree from `GET /api/sqllab/databases`, query history + saved queries (standalone list pages with search/filter/pagination)
+- **Conversational BI** — plain-language → chart/filter/explain/compare, always inspectable SQL + `Apply/Dismiss` (reviewable, reversible)
+- **NL-to-SQL** — describe → editable SQL preview (never auto-run), real schema-aware
+- **Self-healing queries** — `Diagnose` on error → visible `before→after` diff + fixed SQL → `Apply fix` (explicit confirm)
+- **Anomaly / Insight surfacing** — ambient strip on dashboards (trend/spike/drop/outlier/correlation, severity `info|warning|critical`, `View SQL`, badge → highlight chart)
+- **Configurable LLM provider** — OpenAI-compatible (`/settings/ai`, single-active invariant, `x-mock-ai: 1 → 0`, `POST /chat/completions` server-side only, 30s timeout)
+- **RBAC** — Admin / Analyst / Viewer, `roles` → `role_permissions` → `permissions` (22), `database_access`/`datasource_access`, RLS filters
+- **Alerts & Reports** — cron, delivery (email/Slack/webhook), `Test` validates via real handler
+- **Manage** — Annotation Layers, CSS Templates, Tags, Import/Export (ZIP/JSON/YAML)
+- **Admin** — Users, Roles, Permissions, Row Level Security, Action Log (`/log`), About (`/about`), Health (`/health`)
+- **Auth** — first-run setup → sessions (Bearer/`x-session-token`), `RequireAuth` on both client (`src/hooks/useAuth.tsx` + global `window.fetch` patch + `AppShell` guard) and server (`src/lib/requireAuth.ts`, 85 handlers gated; `/api/auth/*`, `/api/setup/*`, `/api/health`, `/api/about` public)
 
 ---
 
-## Server-Side Routing (Backend API)
+## Screenshots
 
-### File-Based API Routing with Nitro
-
-API routes are automatically generated from files in `routes/`. Powered by [Nitro](https://nitro.unjs.io/) and [H3](https://h3.unjs.io/).
-
-**Documentation**:
-
-- [Nitro Routing](https://nitro.unjs.io/guide/routing)
-- [H3 Handlers](https://h3.unjs.io/guide)
-
-### Route Structure
-
-```
-routes/
-├── api/
-│   ├── hello.ts        → GET/POST /api/hello
-│   ├── users/
-│   │   ├── index.ts    → GET/POST /api/users
-│   │   └── [id].ts     → GET/POST /api/users/:id
-│   └── auth/
-│       ├── login.ts    → POST /api/auth/login
-│       └── logout.ts   → POST /api/auth/logout
-└── health.ts           → GET /health
-```
-
-### Creating API Handlers
-
-Use `defineEventHandler` from H3:
-
-```typescript
-// routes/api/hello.ts
-export default defineEventHandler((event) => {
-  return {
-    message: "Hello from API!",
-    timestamp: new Date().toISOString(),
-  };
-});
-```
-
-### HTTP Methods
-
-Handle different HTTP methods:
-
-```typescript
-// routes/api/users/index.ts
-export default defineEventHandler(async (event) => {
-  const method = event.method;
-
-  if (method === "GET") {
-    return { users: [] };
-  }
-
-  if (method === "POST") {
-    const body = await readBody(event);
-    return { created: true, user: body };
-  }
-
-  return { error: "Method not allowed" };
-});
-```
-
-Or use method-specific handlers:
-
-```typescript
-// routes/api/users/index.get.ts
-export default defineEventHandler(() => {
-  return { users: [] };
-});
-
-// routes/api/users/index.post.ts
-export default defineEventHandler(async (event) => {
-  const body = await readBody(event);
-  return { created: true, user: body };
-});
-```
-
-### Dynamic Routes
-
-Use square brackets for dynamic parameters:
-
-```typescript
-// routes/api/users/[id].ts
-export default defineEventHandler((event) => {
-  const id = getRouterParam(event, "id");
-
-  return {
-    user: {
-      id,
-      name: "John Doe",
-    },
-  };
-});
-```
-
-### Request Handling
-
-Common H3 utilities:
-
-```typescript
-import {
-  readBody, // Parse request body
-  getQuery, // Get query parameters
-  getRouterParam, // Get route parameters
-  getCookie, // Get cookies
-  setCookie, // Set cookies
-  getHeader, // Get headers
-  setResponseStatus, // Set response status
-  sendRedirect, // Send redirect
-} from "h3";
-
-export default defineEventHandler(async (event) => {
-  // Get query params: /api/search?q=test
-  const query = getQuery(event);
-  console.log(query.q); // 'test'
-
-  // Get route params: /api/users/123
-  const id = getRouterParam(event, "id");
-
-  // Parse JSON body
-  const body = await readBody(event);
-
-  // Get headers
-  const auth = getHeader(event, "authorization");
-
-  // Set response status
-  setResponseStatus(event, 201);
-
-  return { success: true };
-});
-```
-
-### Error Handling
-
-```typescript
-export default defineEventHandler((event) => {
-  const id = getRouterParam(event, "id");
-
-  if (!id) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: "ID is required",
-    });
-  }
-
-  // Your logic here
-  return { id };
-});
-```
-
-### Middleware
-
-Create middleware in `routes/` with `.ts` extension:
-
-```typescript
-// routes/middleware/auth.ts
-export default defineEventHandler((event) => {
-  const token = getHeader(event, "authorization");
-
-  if (!token) {
-    throw createError({
-      statusCode: 401,
-      statusMessage: "Unauthorized",
-    });
-  }
-
-  // Add user to context
-  event.context.user = { name: "John" };
-});
-```
+> Screenshots coming in the next docs pass. In the meantime, run `npm run dev` and visit:
+> - `/welcome` — recent dashboards/charts, quick actions
+> - `/dashboard/1` — Orders Overview (Bar + Table) with insights strip + cross-filtering
+> - `/explore` — chart builder (try `?chartId=1` from Chart List)
+> - `/sqllab` — SQL Lab with Ask AI + history
 
 ---
 
-## Vite Plugins Guide
+## Database
 
-### vite-plugin-svgr
-
-Import SVGs as React components by adding `?react` query:
-
-```tsx
-import Logo from "@/assets/react.svg?react";
-
-export const App = () => {
-  return (
-    <div>
-      <Logo />
-    </div>
-  );
-};
-```
-
-### unplugin-fonts
-
-Configure Google Fonts in `configs/fonts.config.ts`:
-
-```typescript
-export const fonts = [
-  {
-    name: "Inter",
-    styles: "wght@300;400;500;600;700",
-  },
-  {
-    name: "Space Grotesk",
-    styles: "wght@300;400;500;700",
-  },
-];
-```
-
-[Documentation](https://github.com/cssninjaStudio/unplugin-fonts)
-
-### unplugin-auto-import
-
-Automatically imports React hooks and React Router hooks. No need to import `useState`, `useEffect`, `useNavigate`, etc.
-
-```tsx
-// No imports needed!
-export function Counter() {
-  const [count, setCount] = useState(0);
-  const navigate = useNavigate();
-
-  return (
-    <div>
-      <Button onClick={() => setCount(count + 1)}>Count: {count}</Button>
-    </div>
-  );
-}
-```
-
-To enable auto-import for shadcn/ui components, uncomment in `vite.config.ts`:
-
-```typescript
-AutoImport({
-  imports: ["react", "react-router"],
-  dirs: ["./src/components/ui"], // Uncomment this line
-});
-```
+- `DATABASE_URL` in `.env` (gitignored, example in `.env.example`): `postgresql://postgres:postgres@localhost:5432/metrics_bi`
+- Drizzle ORM — schema `src/db/schema.ts`, connection `src/db/index.ts` (sole `drizzle(pool,{schema})` via `pg` Pool), seed `src/db/seed.ts`
+- Workflow: **dev** → `npm run db:push` (direct sync, no migration file), **prod** → `npm run db:generate` + `npm run db:migrate`
+- Minimal seed: 1 database (`analytics` → Postgres `metrics_bi`), 2 datasets (`orders` 12 rows + `customers` 6), 2 charts, 1 dashboard — owners `Sample`, empty tags/favorites. Real tables `public.orders`/`public.customers` created via `pool.query DDL+INSERT` so `SELECT * FROM public.orders` hits live Postgres.
 
 ---
 
-## Project Structure
+## Known Limitations / Deferred Features
 
-```
-.
-├── src/
-│   ├── assets/          # Static assets (images, SVGs)
-│   ├── components/      # React components
-│   │   └── ui/         # shadcn/ui components
-│   ├── pages/          # Frontend routes (file-based)
-│   ├── hooks/          # Custom React hooks
-│   ├── utils/          # Utility functions
-│   ├── types/          # TypeScript types
-│   ├── constants/      # App constants
-│   ├── data/           # Static data
-│   ├── store/          # State management
-│   └── main.tsx        # App entry point
-├── routes/             # Backend API routes (file-based)
-│   └── api/           # API endpoints
-├── configs/            # Configuration files
-│   └── fonts.config.ts
-├── vite.config.ts      # Vite configuration
-├── tsconfig.json       # TypeScript config
-└── package.json
-```
+This is a beta — core parity is complete, a few deeper lifts are intentionally deferred as honest stubs (see `CLAUDE.md` → **Known gaps (Phase 1)** and **Phase 2 progress → Remaining Phase 2 deferrals** for the full list):
 
----
-
-## Path Aliases
-
-Use `@/` to import from `src/`:
-
-```tsx
-import { Button } from "@/components/ui/button";
-import { cn } from "@/utils/cn";
-import type { User } from "@/types";
-```
-
----
-
-## Deployment
-
-### Docker
-
-```bash
-# Build and run with Docker
-docker build -t react-ts-starter .
-docker run -p 5000:5000 react-ts-starter
-```
-
-### VPS Deployment with nginx
-
-For production deployment on a VPS with nginx, PM2, and SSL configuration, see the complete guide:
-
-📖 **[VPS Deployment Guide](./DEPLOYMENT.md)**
-
-The guide includes:
-
-- nginx configuration for serving static files and proxying API requests
-- PM2 or systemd setup for running the Nitro server
-- SSL certificate setup with Let's Encrypt
-- Monitoring and troubleshooting tips
-- Update and maintenance procedures
-
----
-
-## Notes
-
-- This is a **client-side rendered (CSR)** application
-- For SEO or Server-Side Rendering, consider Next.js, Remix, or Astro
-- The Nitro backend is perfect for APIs, serverless functions, and edge deployments
-
----
-
-## Contributing
-
-Contributions are welcome! Feel free to open issues or submit pull requests.
+- Chart builder: Pie/Donut/Violin/Treemap/Sunburst/Sankey/Gauge + annotations/metric-builder/embedded share are stubbed with honest `DeferredCard` reasons (TanStack 0.14.0 export boundary)
+- Dashboard: tabs, drag-and-drop reordering/resizing (currently add/remove/span-select), CSS template picker, dashboard-level native filter config
+- SQL Lab cross-filtering + drill-to-detail is Bar-only (Line/Area/Scatter/Heatmap/Box Plot deferred); drill-by-dimension + CSV export from drill modal deferred
+- AI: API key encryption at rest, streaming, multi-model routing, persistence/caching beyond session, DuckDB-WASM, auto-injected RLS
 
 ---
 

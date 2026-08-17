@@ -1,15 +1,16 @@
 /**
- * POST /api/charts — placeholder persistence
+ * POST /api/charts — Drizzle/Postgres
  *
- * Pushes into the in-memory `seedCharts` so Chart Explore → Save appears in
- * Chart List immediately (same discipline as seedDatabases mutation for uploads).
- * No DB — resets on restart. Contract is `src/types/chart.ts`.
+ * Inserts into charts + chart_owners. Validates datasetId via DB lookup.
+ * Keeps same ALLOWED_VIZ and slug handling as before.
  */
 import { createError, defineHandler, readBody } from "nitro/h3";
+import { eq } from "drizzle-orm";
 
-import { seedCharts } from "../../../src/data/charts";
-import { seedDatasets } from "../../../src/data/datasets";
-import type { Chart, ChartVizType } from "../../../src/types/chart";
+import { db } from "../../../src/db";
+import { chartOwners, charts, datasets } from "../../../src/db/schema";
+import type { ChartVizType } from "../../../src/types/chart";
+import { requireAuth } from "../../../src/lib/requireAuth";
 
 const ALLOWED_VIZ: ChartVizType[] = [
   "Bar",
@@ -30,15 +31,11 @@ const ALLOWED_VIZ: ChartVizType[] = [
 ];
 
 function slugify(s: string) {
-  return s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 64);
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
 }
 
 export default defineHandler(async (event) => {
+  await requireAuth(event);
   const body = (await readBody(event)) as Partial<{
     name: string;
     vizType: ChartVizType;
@@ -47,36 +44,55 @@ export default defineHandler(async (event) => {
   }>;
 
   if (!body?.name?.trim()) throw createError({ statusCode: 400, message: "name is required" });
-  if (!body.vizType || !ALLOWED_VIZ.includes(body.vizType))
-    throw createError({ statusCode: 400, message: "vizType is required" });
-  if (body.datasetId == null)
-    throw createError({ statusCode: 400, message: "datasetId is required" });
+  if (!body.vizType || !ALLOWED_VIZ.includes(body.vizType)) throw createError({ statusCode: 400, message: "vizType is required" });
+  if (body.datasetId == null) throw createError({ statusCode: 400, message: "datasetId is required" });
 
-  const ds = seedDatasets.find((d) => d.id === body.datasetId);
+  const dsRows = await db.select().from(datasets).where(eq(datasets.id, body.datasetId));
+  const ds = dsRows[0];
   if (!ds) throw createError({ statusCode: 404, message: "Dataset not found" });
 
-  const id = Math.max(0, ...seedCharts.map((c) => c.id)) + 1;
-  const slug = slugify(body.name) || `chart-${id}`;
-  const now = new Date().toISOString();
+  const slugBase = slugify(body.name) || `chart-${Date.now()}`;
+  const existingSlugs = await db.select({ slug: charts.slug }).from(charts);
+  const slugSet = new Set(existingSlugs.map((r) => r.slug));
+  let slug = slugBase;
+  if (slugSet.has(slug)) slug = `${slugBase}-${Date.now()}`;
 
-  const chart: Chart = {
-    id,
-    name: body.name.trim().slice(0, 120),
-    slug,
-    vizType: body.vizType,
+  const [row] = await db
+    .insert(charts)
+    .values({
+      name: body.name.trim().slice(0, 120),
+      slug,
+      vizType: body.vizType,
+      datasetId: ds.id,
+      description: body.description?.trim() || null,
+      certified: false,
+      modifiedById: 1,
+      createdById: 1,
+    })
+    .returning();
+
+  if (!row) throw createError({ statusCode: 500, message: "Failed to create chart" });
+
+  await db.insert(chartOwners).values({ chartId: row.id, userId: 1 }).onConflictDoNothing();
+
+  // Return shape compatible with previous placeholder (with derived fields for client)
+  const chart = {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    vizType: row.vizType,
     dataset: ds.name,
-    database: ds.databaseName,
+    database: ds.databaseId,
     schema: ds.schema,
-    table: ds.table ?? ds.name,
-    modified: now,
-    modifiedBy: { id: 1, name: "Akmal Hazriq" },
-    createdBy: { id: 1, name: "Akmal Hazriq" },
-    owners: [{ id: 1, name: "Akmal Hazriq" }],
+    table: ds.tableName ?? ds.name,
+    modified: (row.modifiedAt ?? row.createdAt).toISOString(),
+    modifiedBy: { id: 1, name: "Admin User" },
+    createdBy: { id: 1, name: "Admin User" },
+    owners: [{ id: 1, name: "Admin User" }],
     tags: [],
     favorite: false,
-    description: body.description?.trim() || undefined,
+    description: row.description ?? undefined,
   };
 
-  seedCharts.unshift(chart);
   return { ok: true, chart };
 });

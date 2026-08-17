@@ -21,9 +21,9 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { mockSavedQueries } from "@/data/sqllab";
 import type { SavedQuery } from "@/types/sqllab";
-import { seedDatabases } from "@/data/databases";
+import { fetchList } from "@/lib/api";
+import type { DatabaseConnection } from "@/types/database";
 
 type ApiResponse = { data: SavedQuery[]; total: number; page: number; pageSize: number };
 
@@ -44,14 +44,16 @@ export default function SavedQueriesListPage() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
 
+  const [liveDbs, setLiveDbs] = useState<DatabaseConnection[]>([]);
   const [rows, setRows] = useState<SavedQuery[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [localRows, setLocalRows] = useState<SavedQuery[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<SavedQuery | null>(null);
 
   const showToast = (msg: string) => {
@@ -81,52 +83,11 @@ export default function SavedQueriesListPage() {
       .then((r) => r.json() as Promise<ApiResponse>)
       .then((res) => {
         if (cancelled) return;
-        let data = res.data;
-        if (localRows) {
-          const map = new Map(localRows.map((s) => [s.id, s]));
-          data = data.map((d) => map.get(d.id) ?? d);
-          const ids = new Set(localRows.map((s) => s.id));
-          data = data.filter((d) => ids.has(d.id));
-          const serverIds = new Set(data.map((d) => d.id));
-          const extras = localRows.filter(
-            (s) => !serverIds.has(s.id) && (!q || s.name.toLowerCase().includes(q.toLowerCase())),
-          );
-          if (extras.length)
-            data = [...extras.slice(0, pageSize - data.length), ...data].slice(0, pageSize);
-        }
-        setRows(data);
-        setTotal(
-          localRows
-            ? localRows.filter(
-                (s) =>
-                  (!q || s.name.toLowerCase().includes(q.toLowerCase())) &&
-                  (database === "all" || s.database === database),
-              ).length
-            : res.total,
-        );
+        setRows(res.data);
+        setTotal(res.total);
       })
       .catch(() => {
-        if (cancelled) return;
-        let data = [...(localRows ?? mockSavedQueries)];
-        if (q) {
-          const qq = q.toLowerCase();
-          data = data.filter(
-            (s) =>
-              s.name.toLowerCase().includes(qq) ||
-              s.database.toLowerCase().includes(qq) ||
-              s.savedBy.toLowerCase().includes(qq) ||
-              s.sql.toLowerCase().includes(qq),
-          );
-        }
-        if (database !== "all") data = data.filter((s) => s.database === database);
-        data.sort((a, b) => {
-          const dir = sortDir === "asc" ? 1 : -1;
-          if (sortBy === "name") return dir * a.name.localeCompare(b.name);
-          if (sortBy === "database") return dir * a.database.localeCompare(b.database);
-          return dir * a.modified.localeCompare(b.modified);
-        });
-        setRows(data.slice((page - 1) * pageSize, page * pageSize));
-        setTotal(data.length);
+        if (!cancelled) showToast("Could not load saved queries");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -134,21 +95,40 @@ export default function SavedQueriesListPage() {
     return () => {
       cancelled = true;
     };
-  }, [q, database, sortBy, sortDir, page, pageSize, localRows]);
+  }, [q, database, sortBy, sortDir, page, pageSize, reloadKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDbs() {
+      try {
+        const res = await fetchList<DatabaseConnection>("/api/databases", { page: 1, pageSize: 50 });
+        if (!cancelled) setLiveDbs(res.data);
+      } catch { if (!cancelled) setLiveDbs([]); }
+    }
+    void loadDbs();
+    return () => { cancelled = true; };
+  }, []);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
 
-  const handleDelete = (id: number) => {
-    setLocalRows((prev) => (prev ?? mockSavedQueries).filter((s) => s.id !== id));
-    setRows((prev) => prev.filter((s) => s.id !== id));
-    setSelected((prev) => {
-      const n = new Set(prev);
-      n.delete(id);
-      return n;
-    });
-    setTotal((t) => Math.max(0, t - 1));
-    showToast("Saved query deleted");
+  const handleDelete = async (id: number) => {
+    try {
+      const res = await fetch(`/api/savedqueries/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Delete failed (${res.status})`);
+      }
+      showToast("Saved query deleted");
+      setSelected((prev) => {
+        const n = new Set(prev);
+        n.delete(id);
+        return n;
+      });
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Delete failed");
+    }
   };
 
   const handleExport = (sq: SavedQuery) => {
@@ -172,19 +152,40 @@ export default function SavedQueriesListPage() {
     navigate(`/sqllab?open=${sq.id}`);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editing || !editing.name.trim()) {
       showToast("Name is required");
       return;
     }
-    const saved = { ...editing, name: editing.name.trim(), modified: new Date().toISOString() };
-    setLocalRows((prev) => {
-      const base = prev ?? mockSavedQueries;
-      return base.map((s) => (s.id === saved.id ? saved : s));
-    });
-    setRows((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
-    setEditing(null);
-    showToast(`Saved "${saved.name}"`);
+    if (!editing.sql.trim()) {
+      showToast("SQL is required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/savedqueries/${editing.id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: editing.name.trim(),
+          database: editing.database,
+          schema: editing.schema,
+          sql: editing.sql,
+          description: editing.description,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Save failed (${res.status})`);
+      }
+      setEditing(null);
+      setReloadKey((k) => k + 1);
+      showToast(`Saved "${editing.name.trim()}"`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -246,7 +247,7 @@ export default function SavedQueriesListPage() {
                   className="border-input bg-background h-8 rounded-md border px-2 pr-6 text-xs font-medium"
                 >
                   <option value="all">All databases</option>
-                  {seedDatabases.map((db) => (
+                  {liveDbs.map((db) => (
                     <option key={db.id} value={db.id}>
                       {db.name} · {db.backend}
                     </option>
@@ -313,13 +314,16 @@ export default function SavedQueriesListPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => {
-                  const ids = selected;
-                  setLocalRows((prev) => (prev ?? mockSavedQueries).filter((s) => !ids.has(s.id)));
-                  setRows((prev) => prev.filter((s) => !ids.has(s.id)));
-                  setTotal((t) => Math.max(0, t - ids.size));
+                onClick={async () => {
+                  const ids = [...selected];
+                  let ok = 0;
+                  for (const delId of ids) {
+                    const res = await fetch(`/api/savedqueries/${delId}`, { method: "DELETE" });
+                    if (res.ok) ok += 1;
+                  }
                   setSelected(new Set());
-                  showToast(`${ids.size} deleted`);
+                  setReloadKey((k) => k + 1);
+                  showToast(ok ? `${ok} deleted` : "Delete failed");
                 }}
               >
                 <Trash2 className="mr-1 h-3 w-3" />
@@ -656,10 +660,7 @@ export default function SavedQueriesListPage() {
           </div>
         </div>
         <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
-          Data layer: <code className="bg-muted rounded px-1 py-0.5">src/data/sqllab.ts</code>{" "}
-          <code className="bg-muted rounded px-1 py-0.5">mockSavedQueries</code> +{" "}
-          <code className="bg-muted rounded px-1 py-0.5">routes/api/savedqueries/index.get.ts</code>{" "}
-          — same canonical seed SQL Lab projects from. Mutations client-side only.
+          Data via <code className="bg-muted rounded px-1 py-0.5">/api/savedqueries</code> — Postgres + Drizzle. Mutations persisted.
         </p>
       </div>
 
@@ -704,13 +705,13 @@ export default function SavedQueriesListPage() {
                           ...editing,
                           database: e.target.value,
                           schema:
-                            seedDatabases.find((d) => d.id === e.target.value)?.schemas[0]?.name ??
+                            liveDbs.find((d) => d.id === e.target.value)?.schemas[0]?.name ??
                             editing.schema,
                         })
                       }
                       className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
                     >
-                      {seedDatabases.map((db) => (
+                      {liveDbs.map((db) => (
                         <option key={db.id} value={db.id}>
                           {db.name}
                         </option>
@@ -727,7 +728,7 @@ export default function SavedQueriesListPage() {
                       onChange={(e) => setEditing({ ...editing, schema: e.target.value })}
                       className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
                     >
-                      {(seedDatabases.find((d) => d.id === editing.database)?.schemas ?? []).map(
+                      {(liveDbs.find((d) => d.id === editing.database)?.schemas ?? []).map(
                         (s) => (
                           <option key={s.name} value={s.name}>
                             {s.name}
@@ -762,8 +763,8 @@ export default function SavedQueriesListPage() {
               <Button variant="outline" size="sm" onClick={() => setEditing(null)}>
                 Cancel
               </Button>
-              <Button size="sm" className="ml-auto" onClick={handleSaveEdit}>
-                Save changes
+              <Button size="sm" className="ml-auto" onClick={handleSaveEdit} disabled={saving}>
+                {saving ? "Saving…" : "Save changes"}
               </Button>
             </div>
           </div>

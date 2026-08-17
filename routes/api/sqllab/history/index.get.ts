@@ -1,14 +1,18 @@
 /**
- * GET /api/sqllab/history — placeholder.
- * Source of truth: `src/data/sqllab.ts` `mockHistory` (same array
- * SQL Lab's History tab reads from). No forked seed — same discipline
- * as `src/data/databases.ts` being canonical for the DB tree.
+ * GET /api/sqllab/history — Drizzle/Postgres
+ *
+ * Replace mockHistory with query_history + users, preserving
+ * search/user/database/status/from/to/sort/pagination.
  */
 import { defineHandler, getQuery } from "nitro/h3";
 
-import { mockHistory } from "../../../../src/data/sqllab";
+import { db } from "../../../../src/db";
+import { queryHistory, users } from "../../../../src/db/schema";
+import type { QueryHistoryEntry } from "../../../../src/types/sqllab";
+import { requireAuth } from "../../../../src/lib/requireAuth";
 
-export default defineHandler((event) => {
+export default defineHandler(async (event) => {
+  await requireAuth(event);
   const q = getQuery(event) as Record<string, string | undefined>;
   const search = (q.q ?? "").toLowerCase().trim();
   const user = (q.user ?? "").toLowerCase().trim();
@@ -21,10 +25,24 @@ export default defineHandler((event) => {
   const page = Math.max(1, Number(q.page ?? 1) || 1);
   const pageSize = Math.min(50, Math.max(1, Number(q.pageSize ?? 10) || 10));
 
-  let filtered = [...mockHistory];
+  const [rows, allUsers] = await Promise.all([db.select().from(queryHistory), db.select().from(users)]);
+  const userName = new Map(allUsers.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+
+  let data: QueryHistoryEntry[] = rows.map((r) => ({
+    id: r.id,
+    time: r.executedAt.toISOString(),
+    user: r.userId ? (userName.get(r.userId) ?? String(r.userId)) : "",
+    database: r.databaseId ?? "",
+    schema: r.schema ?? "",
+    rows: r.rows ?? 0,
+    status: r.status as QueryHistoryEntry["status"],
+    sql: r.sql,
+    durationMs: r.durationMs ?? 0,
+    error: r.errorMessage ?? undefined,
+  }));
 
   if (search) {
-    filtered = filtered.filter(
+    data = data.filter(
       (h) =>
         h.sql.toLowerCase().includes(search) ||
         h.user.toLowerCase().includes(search) ||
@@ -33,23 +51,21 @@ export default defineHandler((event) => {
         (h.error ?? "").toLowerCase().includes(search),
     );
   }
-  if (user) filtered = filtered.filter((h) => h.user.toLowerCase().includes(user));
-  if (database) filtered = filtered.filter((h) => h.database === database);
-  if (status && status !== "all") filtered = filtered.filter((h) => h.status === status);
-  if (from != null && !Number.isNaN(from))
-    filtered = filtered.filter((h) => new Date(h.time).getTime() >= from);
-  if (to != null && !Number.isNaN(to))
-    filtered = filtered.filter((h) => new Date(h.time).getTime() <= to);
+  if (user) data = data.filter((h) => h.user.toLowerCase().includes(user));
+  if (database) data = data.filter((h) => h.database === database);
+  if (status && status !== "all") data = data.filter((h) => h.status === status);
+  if (from != null && !Number.isNaN(from)) data = data.filter((h) => new Date(h.time).getTime() >= from);
+  if (to != null && !Number.isNaN(to)) data = data.filter((h) => new Date(h.time).getTime() <= to);
 
-  filtered.sort((a, b) => {
+  data.sort((a, b) => {
     const dir = sortDir === "asc" ? 1 : -1;
     if (sortBy === "database") return dir * a.database.localeCompare(b.database);
     if (sortBy === "rows") return dir * (a.rows - b.rows);
     return dir * (new Date(a.time).getTime() - new Date(b.time).getTime());
   });
 
-  const total = filtered.length;
+  const total = data.length;
   const start = (page - 1) * pageSize;
-  const data = filtered.slice(start, start + pageSize);
-  return { data, total, page, pageSize };
+  const sliced = data.slice(start, start + pageSize);
+  return { data: sliced, total, page, pageSize };
 });

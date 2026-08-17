@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import {
   ChevronDown,
   ChevronLeft,
@@ -72,6 +72,7 @@ function VizBadge({ type }: { type: ChartVizType }) {
 }
 
 export default function ChartListPage() {
+  const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [vizType, setVizType] = useState<ChartVizType | "all">("all");
   const [dataset, setDataset] = useState("");
@@ -89,7 +90,6 @@ export default function ChartListPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [localRows, setLocalRows] = useState<Chart[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -124,14 +124,7 @@ export default function ChartListPage() {
       .then((r) => r.json() as Promise<ApiResponse>)
       .then((res) => {
         if (cancelled) return;
-        let data = res.data;
-        if (localRows) {
-          const localMap = new Map(localRows.map((d) => [d.id, d]));
-          data = data.map((d) => localMap.get(d.id) ?? d);
-          const existingIds = new Set(localRows.map((d) => d.id));
-          data = data.filter((d) => existingIds.has(d.id));
-        }
-        setRows(data);
+        setRows(res.data);
         setTotal(res.total);
       })
       .catch(() => {
@@ -143,7 +136,7 @@ export default function ChartListPage() {
     return () => {
       cancelled = true;
     };
-  }, [q, vizType, dataset, owner, tag, onlyFavorite, sortBy, sortDir, page, pageSize, localRows]);
+  }, [q, vizType, dataset, owner, tag, onlyFavorite, sortBy, sortDir, page, pageSize]);
 
   const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const someOnPageSelected = rows.some((r) => selected.has(r.id));
@@ -159,20 +152,11 @@ export default function ChartListPage() {
     const apply = (list: Chart[]) =>
       list.map((d) => (d.id === id ? { ...d, favorite: !d.favorite } : d));
     setRows((prev) => apply(prev));
-    setLocalRows((prev) => (prev ? apply(prev) : null));
-    if (!localRows) {
-      setLocalRows(
-        (prev) => prev ?? rows.map((d) => (d.id === id ? { ...d, favorite: !d.favorite } : d)),
-      );
-    }
     showToast("Favorite updated");
   };
 
   const handleDelete = (id: number) => {
     setRows((prev) => prev.filter((d) => d.id !== id));
-    setLocalRows((prev) =>
-      prev ? prev.filter((d) => d.id !== id) : rows.filter((d) => d.id !== id),
-    );
     setSelected((prev) => {
       const n = new Set(prev);
       n.delete(id);
@@ -194,7 +178,6 @@ export default function ChartListPage() {
       favorite: false,
     };
     setRows((prev) => [dup, ...prev].slice(0, pageSize));
-    setLocalRows((prev) => (prev ? [dup, ...prev] : [dup, ...rows]));
     setTotal((t) => t + 1);
     showToast("Chart duplicated");
   };
@@ -203,9 +186,6 @@ export default function ChartListPage() {
     if (selected.size === 0) return;
     const ids = selected;
     setRows((prev) => prev.filter((d) => !ids.has(d.id)));
-    setLocalRows((prev) =>
-      prev ? prev.filter((d) => !ids.has(d.id)) : rows.filter((d) => !ids.has(d.id)),
-    );
     setTotal((t) => Math.max(0, t - ids.size));
     setSelected(new Set());
     showToast(`${ids.size} charts deleted`);
@@ -241,14 +221,13 @@ export default function ChartListPage() {
       schema: "public",
       table: "orders",
       modified: now,
-      modifiedBy: { id: 1, name: "Akmal Hazriq" },
-      createdBy: { id: 1, name: "Akmal Hazriq" },
-      owners: [{ id: 1, name: "Akmal Hazriq" }],
+      modifiedBy: { id: 1, name: "Admin User" },
+      createdBy: { id: 1, name: "Admin User" },
+      owners: [{ id: 1, name: "Admin User" }],
       tags: [],
       favorite: false,
     };
     setRows((prev) => [created, ...prev].slice(0, pageSize));
-    setLocalRows((prev) => (prev ? [created, ...prev] : [created, ...rows]));
     setTotal((t) => t + 1);
     setPage(1);
     showToast("Draft chart created — open in Explore");
@@ -667,7 +646,7 @@ export default function ChartListPage() {
                           </button>
                           <div className="min-w-0">
                             <Link
-                              to={`/explore?chart=${c.id}`}
+                              to={`/explore?chartId=${c.id}`}
                               className="line-clamp-1 text-sm leading-tight font-medium hover:underline"
                               title={c.name}
                             >
@@ -715,22 +694,22 @@ export default function ChartListPage() {
                         </div>
                       </td>
                       <td className="hidden px-2 py-3 lg:table-cell">
-                        <span className="text-muted-foreground text-xs">{c.createdBy.name}</span>
+                        <span className="text-muted-foreground text-xs">{c.createdBy?.name ?? "Sample"}</span>
                       </td>
                       <td className="hidden px-2 py-3 xl:table-cell">
                         <span className="inline-flex items-center">
-                          {c.owners.slice(0, 3).map((o) => (
+                          {(c.owners ?? []).slice(0, 3).map((o) => (
                             <span
                               key={o.id}
-                              title={o.name}
+                              title={o?.name ?? "Sample"}
                               className="border-card bg-muted -ml-1 grid h-6 w-6 place-items-center rounded-full border text-[10px] font-medium first:ml-0"
                             >
-                              {initials(o.name)}
+                              {initials(o?.name ?? "Sample")}
                             </span>
                           ))}
-                          {c.owners.length > 3 && (
+                          {(c.owners ?? []).length > 3 && (
                             <span className="text-muted-foreground ml-1 text-xs">
-                              +{c.owners.length - 3}
+                              +{(c.owners ?? []).length - 3}
                             </span>
                           )}
                         </span>
@@ -777,7 +756,7 @@ export default function ChartListPage() {
                               <button
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  showToast("View — opens chart preview");
+                                  navigate(`/explore?chartId=${c.id}`);
                                 }}
                                 className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >
@@ -786,7 +765,7 @@ export default function ChartListPage() {
                               <button
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  showToast("Edit — opens Explore");
+                                  navigate(`/explore?chartId=${c.id}`);
                                 }}
                                 className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >

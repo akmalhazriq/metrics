@@ -21,6 +21,7 @@ export interface Chart {
   slug: string;
   vizType: ChartVizType;
   dataset: string;
+  datasetId?: number | null;
   database: string;
   schema: string;
   table: string;

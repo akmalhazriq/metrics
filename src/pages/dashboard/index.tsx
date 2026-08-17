@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import {
   ChevronDown,
   ChevronLeft,
@@ -26,9 +26,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { Dashboard, DashboardStatus } from "@/types/dashboard";
-
-type ApiResponse = { data: Dashboard[]; total: number; page: number; pageSize: number };
+import { ApiError, fetchList, mutate } from "@/lib/api";
 
 const STATUS_LABEL: Record<DashboardStatus, string> = {
   published: "Published",
@@ -66,6 +66,7 @@ function initials(name: string) {
 }
 
 export default function DashboardListPage() {
+  const navigate = useNavigate();
   // --- filters / sort / pagination ---
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<DashboardStatus | "all">("all");
@@ -81,13 +82,14 @@ export default function DashboardListPage() {
   const [rows, setRows] = useState<Dashboard[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // local mutations (placeholder — no persistence)
-  const [localRows, setLocalRows] = useState<Dashboard[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [confirmRow, setConfirmRow] = useState<Dashboard | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -103,52 +105,47 @@ export default function DashboardListPage() {
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  // fetch from API (server filters; local mutations overlay)
+  // fetch from API via shared typed client
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (status !== "all") params.set("status", status);
-    if (owner) params.set("owner", owner);
-    if (tag) params.set("tag", tag);
-    if (onlyFavorite) params.set("favorite", "true");
-    params.set("sortBy", sortBy);
-    params.set("sortDir", sortDir);
-    params.set("page", String(page));
-    params.set("pageSize", String(pageSize));
-
-    fetch(`/api/dashboards?${params.toString()}`)
-      .then((r) => r.json() as Promise<ApiResponse>)
-      .then((res) => {
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetchList<Dashboard>("/api/dashboards", {
+          q: q || undefined,
+          status: status !== "all" ? status : undefined,
+          owner: owner || undefined,
+          tag: tag || undefined,
+          favorite: onlyFavorite || undefined,
+          sortBy,
+          sortDir,
+          page,
+          pageSize,
+        });
         if (cancelled) return;
-        // overlay local mutations if any
-        let data = res.data;
-        if (localRows) {
-          // for placeholder, just merge: if localRows has newer favorite/title, prefer it for rows that exist
-          const localMap = new Map(localRows.map((d) => [d.id, d]));
-          data = data.map((d) => localMap.get(d.id) ?? d);
-          // also apply local deletions/inserts via localRows length? keep total as filtered total
-          // deletions handled by filtering out ids not in localRows
-          const existingIds = new Set(localRows.map((d) => d.id));
-          data = data.filter((d) => existingIds.has(d.id));
-        }
-        setRows(data);
+        setRows(res.data);
         setTotal(res.total);
-      })
-      .catch(() => {
-        if (!cancelled) showToast("Could not load dashboards");
-      })
-      .finally(() => {
+      } catch (e) {
+        if (cancelled) return;
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "Could not load dashboards";
+        setError(msg);
+        showToast(msg);
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    }
+    load();
     return () => {
       cancelled = true;
     };
-  }, [q, status, owner, tag, onlyFavorite, sortBy, sortDir, page, pageSize, localRows]);
+  }, [q, status, owner, tag, onlyFavorite, sortBy, sortDir, page, pageSize]);
 
-  // derived: when localRows is active, we need to keep it in sync as source of truth
-  // initialize localRows from first fetch is not needed; we mutate on actions.
 
   const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const someOnPageSelected = rows.some((r) => selected.has(r.id));
@@ -157,69 +154,106 @@ export default function DashboardListPage() {
 
   const uniqueOwners = useMemo(() => {
     const s = new Set<string>();
-    rows.forEach((r) => r.owners.forEach((o) => s.add(o.name)));
+    rows.forEach((r) => (r.owners ?? []).forEach((o) => s.add(o?.name ?? "Sample")));
     return Array.from(s).slice(0, 8);
   }, [rows]);
 
-  const handleToggleFavorite = (id: number) => {
-    const apply = (list: Dashboard[]) =>
-      list.map((d) => (d.id === id ? { ...d, favorite: !d.favorite } : d));
-    setRows((prev) => apply(prev));
-    setLocalRows((prev) => (prev ? apply(prev) : null));
-    // also keep seed sync for future fetches by updating localRows baseline
-    // lazy init localRows from current rows if null
-    if (!localRows) {
-      // rebuild from current visible + assume full set is rows + not-visible; for placeholder just store visible toggle
-      // fetch full seed would be ideal; instead we store a patch via rows
-      setLocalRows(
-        (prev) => prev ?? rows.map((d) => (d.id === id ? { ...d, favorite: !d.favorite } : d)),
-      );
+  const handleToggleFavorite = async (id: number) => {
+    const prev = rows.find((d) => d.id === id);
+    const nextFav = !prev?.favorite;
+    setRows((list) => list.map((d) => (d.id === id ? { ...d, favorite: nextFav } : d)));
+    try {
+      const res = await fetch(`/api/dashboards/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ favorite: nextFav }),
+      });
+      if (!res.ok) throw new Error();
+      const j = (await res.json()) as { favorite: boolean };
+      setRows((list) => list.map((d) => (d.id === id ? { ...d, favorite: j.favorite } : d)));
+      showToast(j.favorite ? "Added to favorites" : "Removed from favorites");
+    } catch {
+      setRows((list) => list.map((d) => (d.id === id ? { ...d, favorite: !nextFav } : d)));
+      showToast("Could not update favorite");
     }
-    showToast("Favorite updated");
   };
 
-  const handleDelete = (id: number) => {
-    setRows((prev) => prev.filter((d) => d.id !== id));
-    setLocalRows((prev) =>
-      prev ? prev.filter((d) => d.id !== id) : rows.filter((d) => d.id !== id),
-    );
-    setSelected((prev) => {
-      const n = new Set(prev);
-      n.delete(id);
-      return n;
-    });
-    setTotal((t) => Math.max(0, t - 1));
-    showToast("Dashboard deleted");
+  const handleDelete = async (row: Dashboard) => {
+    try {
+      await mutate(`/api/dashboards/${row.id}`, "DELETE");
+      setRows((prev) => prev.filter((d) => d.id !== row.id));
+      setSelected((prev) => {
+        const n = new Set(prev);
+        n.delete(row.id);
+        return n;
+      });
+      setTotal((t) => Math.max(0, t - 1));
+      showToast("Dashboard deleted");
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Could not delete dashboard";
+      showToast(msg);
+    }
   };
 
-  const handleDuplicate = (id: number) => {
+  const handleDuplicate = async (id: number) => {
     const src = rows.find((d) => d.id === id);
     if (!src) return;
-    const dup: Dashboard = {
-      ...src,
-      id: Date.now(),
-      title: `${src.title} (copy)`,
-      slug: `${src.slug}-copy-${Date.now()}`,
-      status: "draft",
-      modified: new Date().toISOString(),
-      favorite: false,
-    };
-    setRows((prev) => [dup, ...prev].slice(0, pageSize));
-    setLocalRows((prev) => (prev ? [dup, ...prev] : [dup, ...rows]));
-    setTotal((t) => t + 1);
-    showToast("Dashboard duplicated as draft");
+    try {
+      const res = await fetch("/api/dashboards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `${src.title} (copy)`, status: "draft", description: src.description }),
+      });
+      if (!res.ok) throw new Error();
+      const j = (await res.json()) as { data: Dashboard };
+      // refetch by reloading page 1
+      setPage(1);
+      // optimistic prepend
+      const created: Dashboard = {
+        id: j.data.id,
+        title: j.data.title,
+        slug: j.data.slug,
+        status: j.data.status as Dashboard["status"],
+        modifiedBy: { id: 1, name: "Admin User" },
+        modified: new Date().toISOString(),
+        createdBy: { id: 1, name: "Admin User" },
+        owners: [{ id: 1, name: "Admin User" }],
+        tags: [],
+        favorite: false,
+        description: src.description,
+        layout: src.layout,
+      };
+      setRows((prev) => [created, ...prev].slice(0, pageSize));
+      setTotal((t) => t + 1);
+      showToast("Dashboard duplicated as draft");
+    } catch {
+      showToast("Could not duplicate dashboard");
+    }
   };
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (selected.size === 0) return;
-    const ids = selected;
-    setRows((prev) => prev.filter((d) => !ids.has(d.id)));
-    setLocalRows((prev) =>
-      prev ? prev.filter((d) => !ids.has(d.id)) : rows.filter((d) => !ids.has(d.id)),
-    );
-    setTotal((t) => Math.max(0, t - ids.size));
+    const ids = [...selected];
+    let ok = 0;
+    let fail = 0;
+    let lastErr = "";
+    for (const id of ids) {
+      try {
+        await mutate(`/api/dashboards/${id}`, "DELETE");
+        ok++;
+      } catch (e) {
+        fail++;
+        lastErr = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
+      }
+    }
+    if (ok) {
+      setRows((prev) => prev.filter((d) => !selected.has(d.id)));
+      setTotal((t) => Math.max(0, t - ok));
+    }
+    if (ok && !fail) showToast(`Deleted ${ok} dashboards`);
+    else if (ok && fail) showToast(`Deleted ${ok} of ${ok + fail} dashboards — ${fail} failed: ${lastErr}`);
+    else if (!ok && fail) showToast(lastErr || "Delete failed");
     setSelected(new Set());
-    showToast(`${ids.size} dashboards deleted`);
   };
 
   const handleExport = (ids?: number[]) => {
@@ -240,25 +274,37 @@ export default function DashboardListPage() {
     showToast(`Exported ${targets.length} dashboards`);
   };
 
-  const handleCreate = () => {
-    const now = new Date().toISOString();
-    const created: Dashboard = {
-      id: Date.now(),
-      title: "Untitled dashboard",
-      slug: `untitled-${Date.now()}`,
-      status: "draft",
-      modifiedBy: { id: 1, name: "Akmal Hazriq" },
-      modified: now,
-      createdBy: { id: 1, name: "Akmal Hazriq" },
-      owners: [{ id: 1, name: "Akmal Hazriq" }],
-      tags: [],
-      favorite: false,
-    };
-    setRows((prev) => [created, ...prev].slice(0, pageSize));
-    setLocalRows((prev) => (prev ? [created, ...prev] : [created, ...rows]));
-    setTotal((t) => t + 1);
-    setPage(1);
-    showToast("Draft dashboard created");
+  const handleCreate = async () => {
+    try {
+      const res = await fetch("/api/dashboards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Untitled dashboard" }),
+      });
+      if (!res.ok) throw new Error();
+      const j = (await res.json()) as { data: Dashboard };
+      setPage(1);
+      // trigger refetch via page change; also optimistic
+      setRows((prev) => {
+        const created: Dashboard = {
+          id: j.data.id,
+          title: j.data.title,
+          slug: j.data.slug,
+          status: j.data.status as Dashboard["status"],
+          modifiedBy: { id: 1, name: "Admin User" },
+          modified: new Date().toISOString(),
+          createdBy: { id: 1, name: "Admin User" },
+          owners: [{ id: 1, name: "Admin User" }],
+          tags: [],
+          favorite: false,
+        };
+        return [created, ...prev].slice(0, pageSize);
+      });
+      setTotal((t) => t + 1);
+      showToast("Draft dashboard created");
+    } catch {
+      showToast("Could not create dashboard");
+    }
   };
 
   return (
@@ -468,7 +514,7 @@ export default function DashboardListPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={handleBulkDelete}
+                onClick={() => setConfirmBulk(true)}
               >
                 <Trash2 className="mr-1 h-3 w-3" />
                 Delete
@@ -482,6 +528,12 @@ export default function DashboardListPage() {
             </div>
           )}
         </div>
+
+        {error && (
+          <div className="border-destructive/30 bg-destructive/10 text-destructive mt-4 rounded-md border px-3 py-2 text-xs">
+            {error}
+          </div>
+        )}
 
         {/* Table */}
         <div className="border-border bg-card mt-4 overflow-hidden rounded-lg border">
@@ -695,9 +747,9 @@ export default function DashboardListPage() {
                       <td className="hidden px-2 py-3 sm:table-cell">
                         <span className="inline-flex items-center gap-1.5">
                           <span className="bg-secondary text-secondary-foreground grid h-6 w-6 place-items-center rounded-full text-[10px] font-medium">
-                            {initials(d.modifiedBy.name)}
+                            {initials(d.modifiedBy?.name ?? "Sample")}
                           </span>
-                          <span className="text-xs">{d.modifiedBy.name}</span>
+                          <span className="text-xs">{d.modifiedBy?.name ?? "Sample"}</span>
                         </span>
                       </td>
                       <td className="px-2 py-3">
@@ -715,17 +767,17 @@ export default function DashboardListPage() {
                         </div>
                       </td>
                       <td className="hidden px-2 py-3 lg:table-cell">
-                        <span className="text-muted-foreground text-xs">{d.createdBy.name}</span>
+                        <span className="text-muted-foreground text-xs">{d.createdBy?.name ?? "Sample"}</span>
                       </td>
                       <td className="hidden px-2 py-3 xl:table-cell">
                         <span className="inline-flex items-center">
                           {d.owners.slice(0, 3).map((o) => (
                             <span
                               key={o.id}
-                              title={o.name}
+                              title={o?.name ?? "Sample"}
                               className="border-card bg-muted -ml-1 grid h-6 w-6 place-items-center rounded-full border text-[10px] font-medium first:ml-0"
                             >
-                              {initials(o.name)}
+                              {initials(o?.name ?? "Sample")}
                             </span>
                           ))}
                           {d.owners.length > 3 && (
@@ -777,7 +829,7 @@ export default function DashboardListPage() {
                               <button
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  showToast("View — opens dashboard canvas (Phase 1 next)");
+                                  navigate(`/dashboard/${d.id}`);
                                 }}
                                 className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >
@@ -786,7 +838,7 @@ export default function DashboardListPage() {
                               <button
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  showToast("Edit — opens builder");
+                                  navigate(`/dashboard/${d.id}/edit`);
                                 }}
                                 className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >
@@ -812,9 +864,9 @@ export default function DashboardListPage() {
                               </button>
                               <div className="bg-border my-1 h-px" />
                               <button
-                                onClick={() => {
+                                onClick={async () => {
                                   setOpenMenu(null);
-                                  showToast("Share link copied");
+                                  try { await navigator.clipboard.writeText(`${window.location.origin}/dashboard/${d.id}`); showToast("Link copied"); } catch { showToast("Could not copy link"); }
                                 }}
                                 className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >
@@ -823,7 +875,7 @@ export default function DashboardListPage() {
                               <button
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  showToast("Email report — configure in Alerts");
+                                  showToast("Email delivery requires SMTP configuration — not available in this phase");
                                 }}
                                 className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >
@@ -832,7 +884,7 @@ export default function DashboardListPage() {
                               <button
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  showToast("Change owners — opens owner picker");
+                                  showToast("Ownership transfer coming in a future update");
                                 }}
                                 className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >
@@ -852,7 +904,7 @@ export default function DashboardListPage() {
                               <button
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  handleDelete(d.id);
+                                  setConfirmRow(d);
                                 }}
                                 className="text-destructive hover:bg-destructive hover:text-destructive-foreground flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
                               >
@@ -927,6 +979,24 @@ export default function DashboardListPage() {
         </p>
       </div>
 
+      <ConfirmDialog
+        open={!!confirmRow}
+        onOpenChange={(o) => !o && setConfirmRow(null)}
+        title={`Delete '${confirmRow?.title ?? String(confirmRow?.id ?? "")}'?`}
+        description={`Delete '${confirmRow?.title ?? String(confirmRow?.id ?? "")}'? This cannot be undone.`}
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => { if (confirmRow) return handleDelete(confirmRow); }}
+      />
+      <ConfirmDialog
+        open={confirmBulk}
+        onOpenChange={setConfirmBulk}
+        title={`Delete ${selected.size} dashboards?`}
+        description={`Delete ${selected.size} dashboards? This cannot be undone.`}
+        confirmLabel={`Delete ${selected.size}`}
+        variant="destructive"
+        onConfirm={handleBulkDelete}
+      />
       {toast && (
         <div className="border-border bg-card fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border px-3 py-2 text-sm shadow-lg">
           {toast}
