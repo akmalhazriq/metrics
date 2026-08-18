@@ -6,7 +6,7 @@ labels: bug
 
 ## Describe the bug
 
-A clear, concise description of what the bug is.
+What happened, in plain language.
 
 ## Steps to reproduce
 
@@ -16,11 +16,11 @@ A clear, concise description of what the bug is.
 
 ## Expected behavior
 
-What you expected to happen.
+What you expected to happen instead.
 
 ## Screenshots
 
-If applicable, add screenshots to help explain the problem.
+If you can, add a screenshot or screen recording. It helps a lot.
 
 ## Environment
 
@@ -28,8 +28,8 @@ If applicable, add screenshots to help explain the problem.
 - Browser (and version):
 - Node version:
 - `metrics` version / commit:
-- Database: PostgreSQL version, `DATABASE_URL` host (redact secrets)
+- Database: PostgreSQL version, `DATABASE_URL` host (remove secrets)
 
 ## Additional context
 
-Any other context, logs, or console errors. Check the browser console and `Network` tab for failed `/api/*` requests (status + body) — include those if relevant.
+Anything else that might help. Check the browser console and the Network tab for failed `/api/*` requests (status plus body) and paste those if relevant.

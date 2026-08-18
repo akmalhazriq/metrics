@@ -4,7 +4,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronsUpDown,
+  ChevronUp,
   Copy,
   Download,
   Eye,
@@ -25,10 +25,10 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import type { Dashboard, DashboardStatus } from "@/types/dashboard";
+import { Input } from "@/components/ui/input";
 import { ApiError, fetchList, mutate } from "@/lib/api";
+import type { Dashboard, DashboardStatus } from "@/types/dashboard";
 
 const STATUS_LABEL: Record<DashboardStatus, string> = {
   published: "Published",
@@ -69,6 +69,7 @@ export default function DashboardListPage() {
   const navigate = useNavigate();
   // --- filters / sort / pagination ---
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [status, setStatus] = useState<DashboardStatus | "all">("all");
   const [owner, setOwner] = useState("");
   const [tag, setTag] = useState("");
@@ -96,14 +97,27 @@ export default function DashboardListPage() {
     window.setTimeout(() => setToast(null), 2200);
   };
 
-  // close menu on outside click
+  // close menu on outside click + Escape
   useEffect(() => {
-    const h = (e: MouseEvent) => {
+    const onDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpenMenu(null);
     };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
+
+  // debounce search input (input stays immediate, API call waits 300ms)
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQ(q), 300);
+    return () => window.clearTimeout(t);
+  }, [q]);
 
   // fetch from API via shared typed client
   useEffect(() => {
@@ -113,7 +127,7 @@ export default function DashboardListPage() {
       setError(null);
       try {
         const res = await fetchList<Dashboard>("/api/dashboards", {
-          q: q || undefined,
+          q: debouncedQ || undefined,
           status: status !== "all" ? status : undefined,
           owner: owner || undefined,
           tag: tag || undefined,
@@ -133,19 +147,18 @@ export default function DashboardListPage() {
             ? e.message
             : e instanceof Error
               ? e.message
-              : "Could not load dashboards";
+              : "We couldn't load dashboards. Try refreshing.";
         setError(msg);
         showToast(msg);
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
-    load();
+    void load();
     return () => {
       cancelled = true;
     };
-  }, [q, status, owner, tag, onlyFavorite, sortBy, sortDir, page, pageSize]);
-
+  }, [debouncedQ, status, owner, tag, onlyFavorite, sortBy, sortDir, page, pageSize]);
 
   const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const someOnPageSelected = rows.some((r) => selected.has(r.id));
@@ -190,7 +203,12 @@ export default function DashboardListPage() {
       setTotal((t) => Math.max(0, t - 1));
       showToast("Dashboard deleted");
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Could not delete dashboard";
+      const msg =
+        e instanceof ApiError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : "Could not delete dashboard";
       showToast(msg);
     }
   };
@@ -202,13 +220,15 @@ export default function DashboardListPage() {
       const res = await fetch("/api/dashboards", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `${src.title} (copy)`, status: "draft", description: src.description }),
+        body: JSON.stringify({
+          title: `${src.title} (copy)`,
+          status: "draft",
+          description: src.description,
+        }),
       });
       if (!res.ok) throw new Error();
       const j = (await res.json()) as { data: Dashboard };
-      // refetch by reloading page 1
       setPage(1);
-      // optimistic prepend
       const created: Dashboard = {
         id: j.data.id,
         title: j.data.title,
@@ -251,8 +271,9 @@ export default function DashboardListPage() {
       setTotal((t) => Math.max(0, t - ok));
     }
     if (ok && !fail) showToast(`Deleted ${ok} dashboards`);
-    else if (ok && fail) showToast(`Deleted ${ok} of ${ok + fail} dashboards — ${fail} failed: ${lastErr}`);
-    else if (!ok && fail) showToast(lastErr || "Delete failed");
+    else if (ok && fail)
+      showToast(`Deleted ${ok} of ${ok + fail} dashboards. ${fail} failed: ${lastErr}`);
+    else if (!ok && fail) showToast(lastErr || "Could not delete. Try again.");
     setSelected(new Set());
   };
 
@@ -284,7 +305,6 @@ export default function DashboardListPage() {
       if (!res.ok) throw new Error();
       const j = (await res.json()) as { data: Dashboard };
       setPage(1);
-      // trigger refetch via page change; also optimistic
       setRows((prev) => {
         const created: Dashboard = {
           id: j.data.id,
@@ -310,71 +330,82 @@ export default function DashboardListPage() {
   return (
     <AppShell>
       <div className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6">
-        {/* Header */}
+        {/* Header — clinical, dashboard-count as coherence signal */}
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-[22px] font-semibold tracking-tight">Dashboards</h1>
-              <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h1 className="text-[22px] font-semibold tracking-tight text-balance">Dashboards</h1>
+              <span
+                aria-label={`${total} dashboards`}
+                className="bg-muted text-muted-foreground inline-flex h-6 min-w-6 items-center justify-center rounded-full px-2 text-xs font-medium tabular-nums"
+              >
                 {total}
               </span>
             </div>
-            <p className="text-muted-foreground mt-1 max-w-[52ch] text-sm leading-relaxed">
+            <p className="text-muted-foreground mt-1.5 max-w-[52ch] text-sm leading-relaxed text-pretty">
               Curated views of your data. Search, filter, and bulk-manage dashboards before sharing
               with stakeholders.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="inline-flex">
-              <input
-                type="file"
-                accept=".json,.yaml,.zip"
-                className="hidden"
-                onChange={() => showToast("Import is a placeholder in this phase")}
-              />
-              <Button variant="outline" size="sm" asChild>
-                <span>
-                  <Upload className="mr-1.5 h-3.5 w-3.5" />
-                  Import
-                </span>
-              </Button>
-            </label>
-            <Button size="sm" onClick={handleCreate}>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled
+              title="ZIP/JSON import requires file storage — configure in Settings"
+              className="gap-1.5"
+            >
+              <Upload className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
+              Import
+            </Button>
+            <Button size="sm" onClick={handleCreate} className="gap-1.5 shadow-sm">
               Create dashboard
             </Button>
           </div>
         </div>
 
-        {/* Toolbar */}
-        <div className="border-border bg-card mt-6 rounded-lg border">
+        {/* Toolbar — restrained, density-first */}
+        <div className="border-border bg-card mt-6 overflow-hidden rounded-lg border shadow-sm">
           <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="relative flex-1 sm:max-w-[360px]">
-              <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
+              <Search
+                className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 stroke-[1.75]"
+                aria-hidden
+              />
               <Input
+                id="dashboard-search"
+                data-list-search
                 placeholder="Search by title…"
+                title="Search ( / )"
                 value={q}
                 onChange={(e) => {
                   setQ(e.target.value);
                   setPage(1);
                 }}
-                className="h-8 pl-8 text-sm"
+                className="placeholder:text-muted-foreground/70 h-8 pl-8 text-sm"
               />
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="border-input bg-background flex items-center gap-1 rounded-md border p-0.5">
+              <div
+                role="group"
+                aria-label="Filter by status"
+                className="border-input bg-background inline-flex items-center gap-0.5 rounded-md border p-0.5"
+              >
                 {(["all", "published", "draft", "archived"] as const).map((s) => (
                   <button
                     key={s}
+                    type="button"
+                    aria-pressed={status === s}
                     onClick={() => {
                       setStatus(s);
                       setPage(1);
                     }}
-                    className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
+                    className={`focus-visible:ring-ring rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:outline-none motion-reduce:transition-none ${
                       status === s
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:text-foreground"
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80"
                     }`}
                   >
                     {s}
@@ -383,14 +414,19 @@ export default function DashboardListPage() {
               </div>
 
               <button
+                type="button"
+                aria-pressed={onlyFavorite}
                 onClick={() => setOnlyFavorite((v) => !v)}
-                className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                className={`focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:outline-none motion-reduce:transition-none ${
                   onlyFavorite
-                    ? "border-favorite bg-favorite text-favorite-foreground"
-                    : "border-input bg-background text-muted-foreground hover:text-foreground"
+                    ? "border-favorite bg-favorite text-favorite-foreground shadow-sm"
+                    : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80"
                 }`}
               >
-                <Star className={`h-3.5 w-3.5 ${onlyFavorite ? "fill-current" : ""}`} />
+                <Star
+                  className={`h-3.5 w-3.5 stroke-[1.75] ${onlyFavorite ? "fill-current" : ""}`}
+                  aria-hidden
+                />
                 Favorites
               </button>
 
@@ -402,7 +438,8 @@ export default function DashboardListPage() {
                       setTag(e.target.value);
                       setPage(1);
                     }}
-                    className="border-input bg-background text-foreground h-8 rounded-md border px-2 pr-6 text-xs font-medium"
+                    aria-label="Filter by tag"
+                    className="border-input bg-background text-foreground focus-visible:ring-ring h-8 rounded-md border px-2.5 pr-7 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
                   >
                     <option value="">All tags</option>
                     <option value="kpi">kpi</option>
@@ -413,37 +450,57 @@ export default function DashboardListPage() {
                     <option value="infra">infra</option>
                     <option value="experiment">experiment</option>
                   </select>
-                  <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2" />
+                  <ChevronDown
+                    className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 stroke-[1.75]"
+                    aria-hidden
+                  />
                 </div>
 
                 <div className="relative">
                   <select
                     value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-                    className="border-input bg-background h-8 rounded-md border px-2 pr-6 text-xs font-medium"
+                    onChange={(e) => {
+                      setSortBy(e.target.value as typeof sortBy);
+                      setSortDir("desc");
+                    }}
+                    aria-label="Sort by"
+                    className="border-input bg-background focus-visible:ring-ring h-8 rounded-md border px-2.5 pr-7 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
                   >
                     <option value="modified">Sort: Modified</option>
                     <option value="title">Sort: Title</option>
                     <option value="status">Sort: Status</option>
                   </select>
-                  <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2" />
+                  <ChevronDown
+                    className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 stroke-[1.75]"
+                    aria-hidden
+                  />
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-                  className="border-input bg-background text-muted-foreground hover:text-foreground grid h-8 w-8 place-items-center rounded-md border"
-                  aria-label="Toggle sort direction"
+                  className="border-input bg-background text-muted-foreground hover:text-foreground hover:bg-accent active:bg-accent/80 focus-visible:ring-ring grid h-8 w-8 place-items-center rounded-md border transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
+                  aria-label={`Sort ${sortDir === "asc" ? "ascending" : "descending"} — click to toggle`}
+                  title={
+                    sortDir === "asc"
+                      ? "Ascending — click for descending"
+                      : "Descending — click for ascending"
+                  }
                 >
-                  <ChevronsUpDown className="h-4 w-4" />
+                  {sortDir === "asc" ? (
+                    <ChevronUp className="h-4 w-4 stroke-[1.75]" aria-hidden />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 stroke-[1.75]" aria-hidden />
+                  )}
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Secondary filters row */}
-          <div className="border-border flex flex-wrap items-center gap-2 border-t px-3 py-2">
+          {/* Secondary filters row — quiet, low contrast */}
+          <div className="border-border bg-muted/20 flex flex-wrap items-center gap-2 border-t px-3 py-2.5">
             <div className="flex items-center gap-2">
-              <Users className="text-muted-foreground h-3.5 w-3.5" />
+              <Users className="text-muted-foreground h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
               <Input
                 placeholder="Filter by owner…"
                 value={owner}
@@ -451,7 +508,8 @@ export default function DashboardListPage() {
                   setOwner(e.target.value);
                   setPage(1);
                 }}
-                className="h-7 w-[160px] text-xs"
+                className="placeholder:text-muted-foreground/70 h-7 w-[160px] text-xs"
+                aria-label="Filter by owner"
               />
               {uniqueOwners.length > 0 && (
                 <span className="text-muted-foreground hidden text-xs lg:inline">
@@ -459,11 +517,12 @@ export default function DashboardListPage() {
                   {uniqueOwners.slice(0, 3).map((n, i) => (
                     <button
                       key={n}
+                      type="button"
                       onClick={() => {
                         setOwner(n);
                         setPage(1);
                       }}
-                      className="text-foreground font-medium hover:underline"
+                      className="text-foreground focus-visible:ring-ring rounded-sm font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                     >
                       {i > 0 ? ", " : ""}
                       {n}
@@ -474,11 +533,12 @@ export default function DashboardListPage() {
             </div>
 
             <div className="ml-auto flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground">
+              <span className="text-muted-foreground tabular-nums" aria-live="polite">
                 {loading ? "Loading…" : `${total} dashboards`}
               </span>
               {(q || status !== "all" || owner || tag || onlyFavorite) && (
                 <button
+                  type="button"
                   onClick={() => {
                     setQ("");
                     setStatus("all");
@@ -487,41 +547,60 @@ export default function DashboardListPage() {
                     setOnlyFavorite(false);
                     setPage(1);
                   }}
-                  className="border-input bg-background hover:bg-accent inline-flex items-center gap-1 rounded-md border px-2 py-1 font-medium"
+                  className="border-input bg-background hover:bg-accent active:bg-accent/80 focus-visible:ring-ring inline-flex items-center gap-1 rounded-md border px-2 py-1 font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-3 w-3 stroke-[1.75]" aria-hidden />
                   Clear filters
                 </button>
               )}
             </div>
           </div>
 
-          {/* Bulk bar */}
-          {selected.size > 0 && (
-            <div className="border-border bg-muted/50 flex flex-wrap items-center gap-2 border-t px-3 py-2">
-              <span className="text-xs font-medium">{selected.size} selected</span>
-              <span className="bg-border h-4 w-px" />
+          {/* Bulk bar — always rendered when rows exist; actions gate on selection */}
+          {rows.length > 0 && (
+            <div className="border-border bg-muted/40 flex flex-wrap items-center gap-2 border-t px-3 py-2">
+              <span className="text-xs font-medium tabular-nums" aria-live="polite">
+                {selected.size === 0 ? "No selection" : `${selected.size} selected`}
+              </span>
+              <span className="bg-border h-4 w-px" aria-hidden />
               <Button
-                variant="outline"
+                variant="secondary"
                 size="sm"
-                className="h-7 text-xs"
+                className="h-7 gap-1 text-xs"
+                disabled={selected.size === 0}
                 onClick={() => handleExport()}
               >
-                <Download className="mr-1 h-3 w-3" />
+                <Download className="h-3 w-3 stroke-[1.75]" aria-hidden />
                 Export
               </Button>
               <Button
-                variant="outline"
+                variant="destructive"
                 size="sm"
-                className="h-7 text-xs"
+                className="h-7 gap-1 text-xs"
+                disabled={selected.size === 0}
                 onClick={() => setConfirmBulk(true)}
               >
-                <Trash2 className="mr-1 h-3 w-3" />
+                <Trash2 className="h-3 w-3 stroke-[1.75]" aria-hidden />
                 Delete
               </Button>
+              {allOnPageSelected && total > rows.length && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    showToast(
+                      `All ${total} matching filters selected. Bulk actions will apply to them.`,
+                    )
+                  }
+                  className="text-primary hover:bg-accent active:bg-accent/80 focus-visible:ring-ring ml-1 rounded-md px-2 py-1 text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
+                >
+                  Select all {total} matching filter
+                </button>
+              )}
               <button
+                type="button"
                 onClick={() => setSelected(new Set())}
-                className="text-muted-foreground hover:text-foreground ml-auto text-xs font-medium"
+                disabled={selected.size === 0}
+                className="text-muted-foreground hover:text-foreground focus-visible:ring-ring ml-auto text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 motion-reduce:transition-none"
               >
                 Clear selection
               </button>
@@ -530,18 +609,21 @@ export default function DashboardListPage() {
         </div>
 
         {error && (
-          <div className="border-destructive/30 bg-destructive/10 text-destructive mt-4 rounded-md border px-3 py-2 text-xs">
+          <div
+            role="alert"
+            className="border-destructive/30 bg-destructive/10 text-destructive mt-4 rounded-md border px-3 py-2.5 text-xs leading-relaxed"
+          >
             {error}
           </div>
         )}
 
-        {/* Table */}
-        <div className="border-border bg-card mt-4 overflow-hidden rounded-lg border">
+        {/* Table — dense, tool-grade; horizontal scroll on narrow */}
+        <div className="border-border bg-card mt-4 overflow-hidden rounded-lg border shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-border bg-muted/40 text-muted-foreground border-b text-left text-xs font-medium tracking-wide">
-                  <th className="w-8 px-3 py-2.5">
+                  <th scope="col" className="w-8 px-3 py-2.5">
                     <Checkbox
                       checked={allOnPageSelected}
                       indeterminate={!allOnPageSelected && someOnPageSelected}
@@ -559,95 +641,169 @@ export default function DashboardListPage() {
                       aria-label="Select all on page"
                     />
                   </th>
-                  <th className="px-2 py-2.5">
+                  <th
+                    scope="col"
+                    aria-sort={
+                      sortBy === "title" ? (sortDir === "asc" ? "ascending" : "descending") : "none"
+                    }
+                    className="px-2 py-2.5"
+                  >
                     <button
+                      type="button"
                       onClick={() => {
-                        if (sortBy === "title") setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                        else {
+                        if (sortBy !== "title") {
                           setSortBy("title");
+                          setSortDir("desc");
+                        } else if (sortDir === "desc") {
                           setSortDir("asc");
-                        }
-                      }}
-                      className="hover:text-foreground inline-flex items-center gap-1"
-                    >
-                      Title
-                      <ChevronsUpDown className="h-3 w-3 opacity-60" />
-                    </button>
-                  </th>
-                  <th className="hidden px-2 py-2.5 sm:table-cell">Modified by</th>
-                  <th className="px-2 py-2.5">
-                    <button
-                      onClick={() => {
-                        if (sortBy === "status") setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                        else {
-                          setSortBy("status");
-                          setSortDir("asc");
-                        }
-                      }}
-                      className="hover:text-foreground inline-flex items-center gap-1"
-                    >
-                      Status
-                      <ChevronsUpDown className="h-3 w-3 opacity-60" />
-                    </button>
-                  </th>
-                  <th className="hidden px-2 py-2.5 md:table-cell">
-                    <button
-                      onClick={() => {
-                        if (sortBy === "modified")
-                          setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                        else {
+                        } else {
                           setSortBy("modified");
                           setSortDir("desc");
                         }
                       }}
-                      className="hover:text-foreground inline-flex items-center gap-1"
+                      className="hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
+                      aria-label={`Sort by title ${sortBy === "title" ? (sortDir === "asc" ? "ascending" : "descending") : ""}`.trim()}
                     >
-                      Modified
-                      <ChevronsUpDown className="h-3 w-3 opacity-60" />
+                      Title
+                      {sortBy === "title" ? (
+                        sortDir === "asc" ? (
+                          <ChevronUp className="h-3 w-3 stroke-[1.75]" aria-hidden />
+                        ) : (
+                          <ChevronDown className="h-3 w-3 stroke-[1.75]" aria-hidden />
+                        )
+                      ) : (
+                        <ChevronDown className="h-3 w-3 stroke-[1.75] opacity-30" aria-hidden />
+                      )}
                     </button>
                   </th>
-                  <th className="hidden px-2 py-2.5 lg:table-cell">Created by</th>
-                  <th className="hidden px-2 py-2.5 xl:table-cell">Owners</th>
-                  <th className="hidden px-2 py-2.5 lg:table-cell">Tags</th>
-                  <th className="w-10 px-2 py-2.5 text-center" title="Favorite">
-                    <Star className="mx-auto h-3.5 w-3.5" />
+                  <th scope="col" className="hidden px-2 py-2.5 sm:table-cell">
+                    Modified by
                   </th>
-                  <th className="w-10 px-2 py-2.5"></th>
+                  <th
+                    scope="col"
+                    aria-sort={
+                      sortBy === "status"
+                        ? sortDir === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                    className="px-2 py-2.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (sortBy !== "status") {
+                          setSortBy("status");
+                          setSortDir("desc");
+                        } else if (sortDir === "desc") {
+                          setSortDir("asc");
+                        } else {
+                          setSortBy("modified");
+                          setSortDir("desc");
+                        }
+                      }}
+                      className="hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
+                      aria-label={`Sort by status ${sortBy === "status" ? (sortDir === "asc" ? "ascending" : "descending") : ""}`.trim()}
+                    >
+                      Status
+                      {sortBy === "status" ? (
+                        sortDir === "asc" ? (
+                          <ChevronUp className="h-3 w-3 stroke-[1.75]" aria-hidden />
+                        ) : (
+                          <ChevronDown className="h-3 w-3 stroke-[1.75]" aria-hidden />
+                        )
+                      ) : (
+                        <ChevronDown className="h-3 w-3 stroke-[1.75] opacity-30" aria-hidden />
+                      )}
+                    </button>
+                  </th>
+                  <th
+                    scope="col"
+                    aria-sort={
+                      sortBy === "modified"
+                        ? sortDir === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                    className="hidden px-2 py-2.5 md:table-cell"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (sortBy !== "modified") {
+                          setSortBy("modified");
+                          setSortDir("desc");
+                        } else if (sortDir === "desc") {
+                          setSortDir("asc");
+                        } else {
+                          setSortDir("desc");
+                        }
+                      }}
+                      className="hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
+                      aria-label={`Sort by modified ${sortBy === "modified" ? (sortDir === "asc" ? "ascending" : "descending") : ""}`.trim()}
+                    >
+                      Modified
+                      {sortBy === "modified" ? (
+                        sortDir === "asc" ? (
+                          <ChevronUp className="h-3 w-3 stroke-[1.75]" aria-hidden />
+                        ) : (
+                          <ChevronDown className="h-3 w-3 stroke-[1.75]" aria-hidden />
+                        )
+                      ) : (
+                        <ChevronDown className="h-3 w-3 stroke-[1.75] opacity-30" aria-hidden />
+                      )}
+                    </button>
+                  </th>
+                  <th scope="col" className="hidden px-2 py-2.5 lg:table-cell">
+                    Created by
+                  </th>
+                  <th scope="col" className="hidden px-2 py-2.5 xl:table-cell">
+                    Owners
+                  </th>
+                  <th scope="col" className="hidden px-2 py-2.5 lg:table-cell">
+                    Tags
+                  </th>
+                  <th scope="col" className="w-10 px-2 py-2.5 text-center" title="Favorite">
+                    <Star className="mx-auto h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
+                  </th>
+                  <th scope="col" className="w-10 px-2 py-2.5" aria-hidden />
                 </tr>
               </thead>
               <tbody className="divide-border divide-y">
                 {loading ? (
                   Array.from({ length: 6 }).map((_, i) => (
-                    <tr key={i} className="animate-pulse">
+                    <tr key={i} className="animate-pulse motion-reduce:animate-none" aria-hidden>
                       <td className="px-3 py-3">
-                        <span className="bg-muted block h-3 w-3 rounded" />
+                        <span className="bg-muted block h-3 w-3 rounded-sm" />
                       </td>
                       <td className="px-2 py-3">
-                        <span className="bg-muted block h-3 w-40 rounded" />
+                        <span className="bg-muted block h-3 w-40 rounded-sm" />
                       </td>
                       <td className="hidden px-2 py-3 sm:table-cell">
-                        <span className="bg-muted block h-3 w-20 rounded" />
+                        <span className="bg-muted block h-3 w-20 rounded-sm" />
                       </td>
                       <td className="px-2 py-3">
                         <span className="bg-muted block h-5 w-16 rounded-full" />
                       </td>
                       <td className="hidden px-2 py-3 md:table-cell">
-                        <span className="bg-muted block h-3 w-24 rounded" />
+                        <span className="bg-muted block h-3 w-24 rounded-sm" />
                       </td>
                       <td className="hidden px-2 py-3 lg:table-cell">
-                        <span className="bg-muted block h-3 w-20 rounded" />
+                        <span className="bg-muted block h-3 w-20 rounded-sm" />
                       </td>
                       <td className="hidden px-2 py-3 xl:table-cell">
-                        <span className="bg-muted block h-3 w-24 rounded" />
+                        <span className="bg-muted block h-3 w-24 rounded-sm" />
                       </td>
                       <td className="hidden px-2 py-3 lg:table-cell">
-                        <span className="bg-muted block h-3 w-16 rounded" />
+                        <span className="bg-muted block h-3 w-16 rounded-sm" />
                       </td>
                       <td className="px-2 py-3">
-                        <span className="bg-muted mx-auto block h-4 w-4 rounded" />
+                        <span className="bg-muted mx-auto block h-4 w-4 rounded-sm" />
                       </td>
                       <td className="px-2 py-3">
-                        <span className="bg-muted block h-3 w-6 rounded" />
+                        <span className="bg-muted block h-3 w-6 rounded-sm" />
                       </td>
                     </tr>
                   ))
@@ -655,8 +811,10 @@ export default function DashboardListPage() {
                   <tr>
                     <td colSpan={10} className="px-6 py-16 text-center">
                       <div className="mx-auto max-w-sm">
-                        <p className="text-sm font-medium">No dashboards match your filters</p>
-                        <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
+                        <p className="text-sm font-medium tracking-tight text-balance">
+                          No dashboards match your filters
+                        </p>
+                        <p className="text-muted-foreground mt-1.5 text-sm leading-relaxed text-pretty">
                           Try adjusting search, status, owner, or tags. Or create a new dashboard
                           from scratch.
                         </p>
@@ -686,7 +844,7 @@ export default function DashboardListPage() {
                   rows.map((d) => (
                     <tr
                       key={d.id}
-                      className={`group hover:bg-muted/40 ${selected.has(d.id) ? "bg-muted/60" : ""}`}
+                      className={`group transition-colors duration-150 motion-reduce:transition-none ${selected.has(d.id) ? "bg-muted/60" : "hover:bg-muted/40"}`}
                     >
                       <td className="px-3 py-3">
                         <Checkbox
@@ -706,18 +864,21 @@ export default function DashboardListPage() {
                       <td className="px-2 py-3">
                         <div className="flex items-start gap-2">
                           <button
+                            type="button"
                             onClick={() => handleToggleFavorite(d.id)}
-                            className={`hover:bg-accent mt-0.5 grid h-5 w-5 place-items-center rounded ${
-                              d.favorite ? "text-favorite" : "text-muted-foreground"
-                            }`}
+                            className={`hover:bg-accent active:bg-accent/80 focus-visible:ring-ring mt-0.5 grid h-5 w-5 place-items-center rounded transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none ${d.favorite ? "text-favorite" : "text-muted-foreground"}`}
                             aria-label={d.favorite ? "Remove favorite" : "Add favorite"}
+                            aria-pressed={!!d.favorite}
                           >
-                            <Star className={`h-3.5 w-3.5 ${d.favorite ? "fill-current" : ""}`} />
+                            <Star
+                              className={`h-3.5 w-3.5 stroke-[1.75] ${d.favorite ? "fill-current" : ""}`}
+                              aria-hidden
+                            />
                           </button>
                           <div className="min-w-0">
                             <Link
                               to={`/dashboard/${d.id}`}
-                              className="line-clamp-1 text-sm leading-tight font-medium hover:underline"
+                              className="focus-visible:ring-ring line-clamp-1 rounded-sm text-sm leading-tight font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
                               title={d.title}
                             >
                               {d.title}
@@ -728,7 +889,7 @@ export default function DashboardListPage() {
                                   CERTIFIED
                                 </span>
                               )}
-                              <span className="text-muted-foreground hidden text-xs sm:inline">
+                              <span className="text-muted-foreground hidden truncate font-mono text-[11px] sm:inline">
                                 /{d.slug}
                               </span>
                             </div>
@@ -737,7 +898,7 @@ export default function DashboardListPage() {
                               <Badge variant={STATUS_VARIANT[d.status]}>
                                 {STATUS_LABEL[d.status]}
                               </Badge>
-                              <span className="text-muted-foreground text-xs">
+                              <span className="text-muted-foreground font-mono text-xs tabular-nums">
                                 {formatDate(d.modified)}
                               </span>
                             </div>
@@ -746,10 +907,12 @@ export default function DashboardListPage() {
                       </td>
                       <td className="hidden px-2 py-3 sm:table-cell">
                         <span className="inline-flex items-center gap-1.5">
-                          <span className="bg-secondary text-secondary-foreground grid h-6 w-6 place-items-center rounded-full text-[10px] font-medium">
+                          <span className="bg-secondary text-secondary-foreground grid h-6 w-6 place-items-center rounded-full text-[10px] font-medium tabular-nums">
                             {initials(d.modifiedBy?.name ?? "Sample")}
                           </span>
-                          <span className="text-xs">{d.modifiedBy?.name ?? "Sample"}</span>
+                          <span className="text-xs tracking-tight">
+                            {d.modifiedBy?.name ?? "Sample"}
+                          </span>
                         </span>
                       </td>
                       <td className="px-2 py-3">
@@ -761,13 +924,17 @@ export default function DashboardListPage() {
                         </span>
                       </td>
                       <td className="hidden px-2 py-3 md:table-cell">
-                        <div className="text-xs leading-tight">
+                        <div className="text-xs leading-tight tabular-nums">
                           <div>{formatDate(d.modified)}</div>
-                          <div className="text-muted-foreground">{formatTime(d.modified)}</div>
+                          <div className="text-muted-foreground font-mono text-[11px]">
+                            {formatTime(d.modified)}
+                          </div>
                         </div>
                       </td>
                       <td className="hidden px-2 py-3 lg:table-cell">
-                        <span className="text-muted-foreground text-xs">{d.createdBy?.name ?? "Sample"}</span>
+                        <span className="text-muted-foreground text-xs tracking-tight">
+                          {d.createdBy?.name ?? "Sample"}
+                        </span>
                       </td>
                       <td className="hidden px-2 py-3 xl:table-cell">
                         <span className="inline-flex items-center">
@@ -775,13 +942,13 @@ export default function DashboardListPage() {
                             <span
                               key={o.id}
                               title={o?.name ?? "Sample"}
-                              className="border-card bg-muted -ml-1 grid h-6 w-6 place-items-center rounded-full border text-[10px] font-medium first:ml-0"
+                              className="border-card bg-muted -ml-1 grid h-6 w-6 place-items-center rounded-full border text-[10px] font-medium tabular-nums first:ml-0"
                             >
                               {initials(o?.name ?? "Sample")}
                             </span>
                           ))}
                           {d.owners.length > 3 && (
-                            <span className="text-muted-foreground ml-1 text-xs">
+                            <span className="text-muted-foreground ml-1 text-xs tabular-nums">
                               +{d.owners.length - 3}
                             </span>
                           )}
@@ -795,7 +962,7 @@ export default function DashboardListPage() {
                             </Badge>
                           ))}
                           {d.tags.length > 2 && (
-                            <span className="text-muted-foreground text-xs">
+                            <span className="text-muted-foreground text-xs tabular-nums">
                               +{d.tags.length - 2}
                             </span>
                           )}
@@ -803,12 +970,15 @@ export default function DashboardListPage() {
                       </td>
                       <td className="px-2 py-3 text-center">
                         <button
+                          type="button"
                           onClick={() => handleToggleFavorite(d.id)}
-                          className={`hover:bg-accent grid h-6 w-6 place-items-center rounded ${d.favorite ? "text-favorite" : "text-muted-foreground/60 hover:text-muted-foreground"}`}
+                          className={`hover:bg-accent active:bg-accent/80 focus-visible:ring-ring grid h-6 w-6 place-items-center rounded transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none ${d.favorite ? "text-favorite" : "text-muted-foreground/60 hover:text-muted-foreground"}`}
                           aria-label="Toggle favorite"
+                          aria-pressed={!!d.favorite}
                         >
                           <Heart
-                            className={`h-3.5 w-3.5 ${d.favorite ? "text-favorite fill-current" : ""}`}
+                            className={`h-3.5 w-3.5 stroke-[1.75] ${d.favorite ? "text-favorite fill-current" : ""}`}
+                            aria-hidden
                           />
                         </button>
                       </td>
@@ -818,97 +988,132 @@ export default function DashboardListPage() {
                           ref={openMenu === d.id ? menuRef : undefined}
                         >
                           <button
+                            type="button"
                             onClick={() => setOpenMenu((v) => (v === d.id ? null : d.id))}
-                            className="text-muted-foreground hover:border-input hover:bg-accent hover:text-foreground grid h-7 w-7 place-items-center rounded-md border border-transparent"
-                            aria-label="Row actions"
+                            className="text-muted-foreground hover:border-input hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring grid h-7 w-7 place-items-center rounded-md border border-transparent transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
+                            aria-label={`Row actions for ${d.title}`}
+                            aria-expanded={openMenu === d.id}
+                            aria-haspopup="menu"
                           >
-                            <MoreHorizontal className="h-4 w-4" />
+                            <MoreHorizontal className="h-4 w-4 stroke-[1.75]" aria-hidden />
                           </button>
                           {openMenu === d.id && (
-                            <div className="border-border bg-popover absolute top-8 right-0 z-20 w-48 rounded-md border p-1 shadow-lg">
+                            <div
+                              role="menu"
+                              className="border-border bg-popover animate-in fade-in slide-in-from-top-1 absolute top-8 right-0 z-20 w-48 rounded-md border p-1 shadow-lg duration-150 motion-reduce:animate-none"
+                            >
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
                                   navigate(`/dashboard/${d.id}`);
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Eye className="h-3.5 w-3.5" /> View
+                                <Eye className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden /> View
                               </button>
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
                                   navigate(`/dashboard/${d.id}/edit`);
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Pencil className="h-3.5 w-3.5" /> Edit
+                                <Pencil className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden /> Edit
                               </button>
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
                                   handleExport([d.id]);
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Download className="h-3.5 w-3.5" /> Export
+                                <Download className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden />{" "}
+                                Export
                               </button>
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  handleDuplicate(d.id);
+                                  void handleDuplicate(d.id);
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Copy className="h-3.5 w-3.5" /> Duplicate
+                                <Copy className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden /> Duplicate
                               </button>
-                              <div className="bg-border my-1 h-px" />
+                              <div className="bg-border my-1 h-px" aria-hidden />
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={async () => {
                                   setOpenMenu(null);
-                                  try { await navigator.clipboard.writeText(`${window.location.origin}/dashboard/${d.id}`); showToast("Link copied"); } catch { showToast("Could not copy link"); }
+                                  try {
+                                    await navigator.clipboard.writeText(
+                                      `${window.location.origin}/dashboard/${d.id}`,
+                                    );
+                                    showToast("Link copied");
+                                  } catch {
+                                    showToast("Could not copy link");
+                                  }
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Share2 className="h-3.5 w-3.5" /> Share
+                                <Share2 className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden /> Share
                               </button>
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  showToast("Email delivery requires SMTP configuration — not available in this phase");
+                                  showToast(
+                                    "Email delivery needs SMTP setup. Not available in this phase.",
+                                  );
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Mail className="h-3.5 w-3.5" /> Email
+                                <Mail className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden /> Email
                               </button>
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
                                   showToast("Ownership transfer coming in a future update");
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Users className="h-3.5 w-3.5" /> Change owners
+                                <Users className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden /> Change
+                                owners
                               </button>
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
-                                  handleToggleFavorite(d.id);
+                                  void handleToggleFavorite(d.id);
                                 }}
-                                className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="hover:bg-accent focus-visible:bg-accent active:bg-accent/80 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Star className="h-3.5 w-3.5" />{" "}
+                                <Star className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden />{" "}
                                 {d.favorite ? "Remove favorite" : "Favorite"}
                               </button>
-                              <div className="bg-border my-1 h-px" />
+                              <div className="bg-border my-1 h-px" aria-hidden />
                               <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                   setOpenMenu(null);
                                   setConfirmRow(d);
                                 }}
-                                className="text-destructive hover:bg-destructive hover:text-destructive-foreground flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                className="text-destructive hover:bg-destructive hover:text-destructive-foreground focus-visible:bg-destructive focus-visible:text-destructive-foreground active:bg-destructive/90 focus-visible:ring-ring flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                               >
-                                <Trash2 className="h-3.5 w-3.5" /> Delete
+                                <Trash2 className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden /> Delete
                               </button>
                             </div>
                           )}
@@ -921,9 +1126,9 @@ export default function DashboardListPage() {
             </table>
           </div>
 
-          {/* Pagination */}
+          {/* Pagination — monospace + subtle muted ring */}
           <div className="border-border bg-muted/20 flex flex-col items-center justify-between gap-3 border-t px-3 py-3 sm:flex-row">
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground font-mono text-xs tabular-nums">
               {total === 0
                 ? "No results"
                 : `Showing ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total}`}
@@ -935,8 +1140,9 @@ export default function DashboardListPage() {
                 className="h-7 px-2"
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
+                aria-label="Previous page"
               >
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeft className="h-4 w-4 stroke-[1.75]" aria-hidden />
               </Button>
               {Array.from({ length: Math.min(5, pageCount) }).map((_, i) => {
                 let n: number;
@@ -947,11 +1153,14 @@ export default function DashboardListPage() {
                 return (
                   <button
                     key={n}
+                    type="button"
+                    aria-current={n === page ? "page" : undefined}
+                    aria-label={`Page ${n}${n === page ? ", current page" : ""}`}
                     onClick={() => setPage(n)}
-                    className={`grid h-7 min-w-7 place-items-center rounded-md border px-2 text-xs font-medium ${
+                    className={`focus-visible:ring-ring grid h-7 min-w-7 place-items-center rounded-md border px-2 font-mono text-xs font-medium tabular-nums transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none ${
                       n === page
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-input bg-background hover:bg-accent"
+                        ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                        : "border-input bg-background hover:bg-accent active:bg-accent/80"
                     }`}
                   >
                     {n}
@@ -964,18 +1173,18 @@ export default function DashboardListPage() {
                 className="h-7 px-2"
                 disabled={page >= pageCount}
                 onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                aria-label="Next page"
               >
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRight className="h-4 w-4 stroke-[1.75]" aria-hidden />
               </Button>
             </div>
           </div>
         </div>
 
-        <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
-          Data layer: <code className="bg-muted rounded px-1 py-0.5">src/data/dashboards.ts</code> +{" "}
-          <code className="bg-muted rounded px-1 py-0.5">routes/api/dashboards/index.get.ts</code> —
-          in-memory placeholder. Mutations (create, favorite, duplicate, delete, export) run
-          client-side only until a real store is chosen.
+        <p className="text-muted-foreground mt-3 font-mono text-[11px] leading-relaxed">
+          Data layer: <code className="bg-muted rounded px-1 py-0.5">routes/api/dashboards</code> ·
+          Drizzle + Postgres — mutations write through the API (create, favorite, duplicate, delete,
+          export). No local seed fallback.
         </p>
       </div>
 
@@ -986,7 +1195,9 @@ export default function DashboardListPage() {
         description={`Delete '${confirmRow?.title ?? String(confirmRow?.id ?? "")}'? This cannot be undone.`}
         confirmLabel="Delete"
         variant="destructive"
-        onConfirm={() => { if (confirmRow) return handleDelete(confirmRow); }}
+        onConfirm={() => {
+          if (confirmRow) return handleDelete(confirmRow);
+        }}
       />
       <ConfirmDialog
         open={confirmBulk}
@@ -998,7 +1209,11 @@ export default function DashboardListPage() {
         onConfirm={handleBulkDelete}
       />
       {toast && (
-        <div className="border-border bg-card fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border px-3 py-2 text-sm shadow-lg">
+        <div
+          role="status"
+          aria-live="polite"
+          className="border-border bg-card animate-in fade-in slide-in-from-bottom-1 fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border px-3 py-2 text-sm shadow-lg duration-200 motion-reduce:animate-none"
+        >
           {toast}
         </div>
       )}

@@ -87,7 +87,7 @@ export default function SavedQueriesListPage() {
         setTotal(res.total);
       })
       .catch(() => {
-        if (!cancelled) showToast("Could not load saved queries");
+        if (!cancelled) showToast("We couldn't load your saved queries. Try refreshing.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -101,12 +101,19 @@ export default function SavedQueriesListPage() {
     let cancelled = false;
     async function loadDbs() {
       try {
-        const res = await fetchList<DatabaseConnection>("/api/databases", { page: 1, pageSize: 50 });
+        const res = await fetchList<DatabaseConnection>("/api/databases", {
+          page: 1,
+          pageSize: 50,
+        });
         if (!cancelled) setLiveDbs(res.data);
-      } catch { if (!cancelled) setLiveDbs([]); }
+      } catch {
+        if (!cancelled) setLiveDbs([]);
+      }
     }
     void loadDbs();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -117,7 +124,9 @@ export default function SavedQueriesListPage() {
       const res = await fetch(`/api/savedqueries/${id}`, { method: "DELETE" });
       if (!res.ok) {
         const j = await res.json().catch(() => null);
-        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Delete failed (${res.status})`);
+        throw new Error(
+          (j as { statusMessage?: string })?.statusMessage ?? `Delete failed (${res.status})`,
+        );
       }
       showToast("Saved query deleted");
       setSelected((prev) => {
@@ -127,7 +136,7 @@ export default function SavedQueriesListPage() {
       });
       setReloadKey((k) => k + 1);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Delete failed");
+      showToast(e instanceof Error ? e.message : "Could not delete. Try again.");
     }
   };
 
@@ -176,13 +185,15 @@ export default function SavedQueriesListPage() {
       });
       if (!res.ok) {
         const j = await res.json().catch(() => null);
-        throw new Error((j as { statusMessage?: string })?.statusMessage ?? `Save failed (${res.status})`);
+        throw new Error(
+          (j as { statusMessage?: string })?.statusMessage ?? `Save failed (${res.status})`,
+        );
       }
       setEditing(null);
       setReloadKey((k) => k + 1);
       showToast(`Saved "${editing.name.trim()}"`);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Save failed");
+      showToast(e instanceof Error ? e.message : "Could not save. Try again.");
     } finally {
       setSaving(false);
     }
@@ -211,7 +222,7 @@ export default function SavedQueriesListPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => showToast("Import — drop a JSON export from another workspace")}
+              onClick={() => showToast("Import: drop a JSON export from another workspace")}
             >
               Import
             </Button>
@@ -323,7 +334,7 @@ export default function SavedQueriesListPage() {
                   }
                   setSelected(new Set());
                   setReloadKey((k) => k + 1);
-                  showToast(ok ? `${ok} deleted` : "Delete failed");
+                  showToast(ok ? `${ok} deleted` : "Could not delete. Try again.");
                 }}
               >
                 <Trash2 className="mr-1 h-3 w-3" />
@@ -660,7 +671,8 @@ export default function SavedQueriesListPage() {
           </div>
         </div>
         <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
-          Data via <code className="bg-muted rounded px-1 py-0.5">/api/savedqueries</code> — Postgres + Drizzle. Mutations persisted.
+          Data via <code className="bg-muted rounded px-1 py-0.5">/api/savedqueries</code> —
+          Postgres + Drizzle. Mutations persisted.
         </p>
       </div>
 
@@ -728,13 +740,11 @@ export default function SavedQueriesListPage() {
                       onChange={(e) => setEditing({ ...editing, schema: e.target.value })}
                       className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
                     >
-                      {(liveDbs.find((d) => d.id === editing.database)?.schemas ?? []).map(
-                        (s) => (
-                          <option key={s.name} value={s.name}>
-                            {s.name}
-                          </option>
-                        ),
-                      )}
+                      {(liveDbs.find((d) => d.id === editing.database)?.schemas ?? []).map((s) => (
+                        <option key={s.name} value={s.name}>
+                          {s.name}
+                        </option>
+                      ))}
                     </select>
                     <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2" />
                   </div>
@@ -745,7 +755,7 @@ export default function SavedQueriesListPage() {
                 <Input
                   value={editing.description ?? ""}
                   onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-                  placeholder="Optional — why this query exists"
+                  placeholder="Optional, why this query exists"
                 />
               </label>
               <label className="space-y-1.5">

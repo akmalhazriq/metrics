@@ -90,7 +90,7 @@ export default function QueryHistoryPage() {
             ? e.message
             : e instanceof Error
               ? e.message
-              : "Could not load Query history";
+              : "We couldn't load query history. Try refreshing.";
         setError(msg);
         showToast(msg);
       } finally {
@@ -106,12 +106,19 @@ export default function QueryHistoryPage() {
     let cancelled = false;
     async function loadDbs() {
       try {
-        const res = await apiFetchList<DatabaseConnection>("/api/databases", { page: 1, pageSize: 50 });
+        const res = await apiFetchList<DatabaseConnection>("/api/databases", {
+          page: 1,
+          pageSize: 50,
+        });
         if (!cancelled) setLiveDbs(res.data);
-      } catch { if (!cancelled) setLiveDbs([]); }
+      } catch {
+        if (!cancelled) setLiveDbs([]);
+      }
     }
     void loadDbs();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -521,9 +528,11 @@ export default function QueryHistoryPage() {
           </div>
         </div>
         <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
-          Data layer: Postgres via <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/history</code> (
+          Data layer: Postgres via{" "}
+          <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/history</code> (
           <code className="bg-muted rounded px-1 py-0.5">query_history</code> +{" "}
-          <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/execute</code> appends) — live, no mock.
+          <code className="bg-muted rounded px-1 py-0.5">/api/sqllab/execute</code> appends) — live,
+          no mock.
         </p>
       </div>
 

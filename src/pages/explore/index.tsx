@@ -95,11 +95,11 @@ const VIZ_ICON: Record<string, React.ElementType> = {
 
 function inferNumericKey(ds: Dataset): string | null {
   const rows = ds.sampleRows ?? [];
-  for (const col of ds.columns) {
+  for (const col of ds.columns ?? []) {
     if (!/NUMERIC|INTEGER|FLOAT|DOUBLE|DECIMAL/i.test(col.type)) continue;
     if (rows.some((r) => typeof r[col.name] === "number")) return col.name;
   }
-  for (const col of ds.columns) {
+  for (const col of ds.columns ?? []) {
     if (rows.some((r) => typeof r[col.name] === "number")) return col.name;
   }
   return null;
@@ -113,7 +113,7 @@ function aggregateForChart(
 ): { rows: { label: string; value: number }[]; bigNumber: number | null; metricLabel: string } {
   const sample = ds.sampleRows ?? [];
   if (!metricName) return { rows: [], bigNumber: null, metricLabel: "—" };
-  const metric = ds.metrics.find((m) => m.name === metricName);
+  const metric = (ds.metrics ?? []).find((m) => m.name === metricName);
   const metricLabel = metric?.name ?? metricName;
   const numericKey = inferNumericKey(ds);
   const isCount = /count/i.test(metricName);
@@ -169,7 +169,7 @@ function buildSql(
   metricName: string | null,
   rowLimit: number,
 ) {
-  const metric = ds.metrics.find((m) => m.name === metricName);
+  const metric = (ds.metrics ?? []).find((m) => m.name === metricName);
   const expr = metric?.sqlExpression ?? (metricName ? metricName : "*");
   const dim = dimension ? `${dimension}, ` : "";
   const grp = dimension ? `GROUP BY ${dimension}\n` : "";
@@ -183,9 +183,9 @@ export default function ExplorePage() {
   const [datasetsLoading, setDatasetsLoading] = useState(true);
   const [datasetsError, setDatasetsError] = useState<string | null>(null);
   const [datasetId, setDatasetId] = useState<number | null>(null);
-  const ds = useMemo(() => {
-    if (!datasets.length) return null as unknown as Dataset;
-    return datasets.find((d) => d.id === datasetId) ?? datasets[0]!;
+  const ds: Dataset | null = useMemo(() => {
+    if (!datasets.length) return null;
+    return datasets.find((d) => d.id === datasetId) ?? datasets[0] ?? null;
   }, [datasets, datasetId]);
 
   useEffect(() => {
@@ -200,7 +200,12 @@ export default function ExplorePage() {
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Failed to load datasets";
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "Failed to load datasets";
         setDatasetsError(msg);
       })
       .finally(() => {
@@ -211,10 +216,10 @@ export default function ExplorePage() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const groupableCols = useMemo(() => (ds ? ds.columns.filter((c) => c.groupable) : []), [ds]);
+  const groupableCols = useMemo(() => ds?.columns?.filter((c) => c.groupable) ?? [], [ds]);
   const [vizType, setVizType] = useState<ExploreViz>("Bar");
   const [dimension, setDimension] = useState<string | null>(() => groupableCols[0]?.name ?? null);
-  const [metricName, setMetricName] = useState<string | null>(() => ds.metrics[0]?.name ?? null);
+  const [metricName, setMetricName] = useState<string | null>(() => ds?.metrics?.[0]?.name ?? null);
   const [rowLimit, setRowLimit] = useState(10);
   const [filterText, setFilterText] = useState("");
   const [activeTab, setActiveTab] = useState<"Data" | "Customize" | "Query" | "Results">("Data");
@@ -251,7 +256,9 @@ export default function ExplorePage() {
     fetch(`/api/charts/${id}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<{ data: { id: number; vizType: string; datasetId: number | null; name: string } }>;
+        return r.json() as Promise<{
+          data: { id: number; vizType: string; datasetId: number | null; name: string };
+        }>;
       })
       .then((res) => {
         if (cancelled) return;
@@ -264,14 +271,14 @@ export default function ExplorePage() {
           setDatasetId(d.datasetId);
           const next = datasets.find((x) => x.id === d.datasetId);
           if (next) {
-            setDimension(next.columns.find((c) => c.groupable)?.name ?? null);
-            setMetricName(next.metrics[0]?.name ?? null);
+            setDimension(next.columns?.find((c) => c.groupable)?.name ?? null);
+            setMetricName(next.metrics?.[0]?.name ?? null);
           }
         }
-        showToast(`Loaded "${d.name}" — review and Save`);
+        showToast(`Loaded "${d.name}". Review and hit Save.`);
       })
       .catch(() => {
-        if (!cancelled) showToast("Could not load chart for ?chartId");
+        if (!cancelled) showToast("We couldn't load that chart. Check the link and try again.");
       });
     return () => {
       cancelled = true;
@@ -286,8 +293,8 @@ export default function ExplorePage() {
     if (!next) return;
     // If dimension/metric still null (hydration happened before datasets loaded), populate
     if (dimension == null && metricName == null) {
-      setDimension(next.columns.find((c) => c.groupable)?.name ?? null);
-      setMetricName(next.metrics[0]?.name ?? null);
+      setDimension(next.columns?.find((c) => c.groupable)?.name ?? null);
+      setMetricName(next.metrics?.[0]?.name ?? null);
     }
   }, [datasets, datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -295,8 +302,8 @@ export default function ExplorePage() {
     setDatasetId(id);
     const next = datasets.find((d) => d.id === id);
     if (!next) return;
-    setDimension(next.columns.find((c) => c.groupable)?.name ?? null);
-    setMetricName(next.metrics[0]?.name ?? null);
+    setDimension(next.columns?.find((c) => c.groupable)?.name ?? null);
+    setMetricName(next.metrics?.[0]?.name ?? null);
   };
 
   const sendAi = async (override?: string) => {
@@ -320,9 +327,14 @@ export default function ExplorePage() {
       });
       const data = (await res.json()) as ConverseResponse & { error?: string };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setAiExchanges((prev) => [...prev.slice(-3), { id: Date.now(), prompt: msg, response: data }]);
+      setAiExchanges((prev) => [
+        ...prev.slice(-3),
+        { id: Date.now(), prompt: msg, response: data },
+      ]);
       setAiInput("");
-      requestAnimationFrame(() => aiScrollRef.current?.scrollTo({ top: 99999, behavior: "smooth" }));
+      requestAnimationFrame(() =>
+        aiScrollRef.current?.scrollTo({ top: 99999, behavior: "smooth" }),
+      );
     } catch (e: unknown) {
       setAiError(e instanceof Error ? e.message : "Couldn’t reach the assistant");
     } finally {
@@ -333,18 +345,18 @@ export default function ExplorePage() {
   const applyExchange = (ex: { prompt: string; response: ConverseResponse }) => {
     const a = ex.response.action;
     if (!a) {
-      showToast("Nothing to apply — this was an explanation.");
+      showToast("Nothing to apply. This was just an explanation.");
       return;
     }
     if (a.type === "modify_chart") {
       if (a.payload.vizType) {
         const v = a.payload.vizType as ExploreViz;
         if ((SUPPORTED as string[]).includes(v)) setVizType(v);
-        else showToast(`${v} is deferred — shown as preview only`);
+        else showToast(`${v} is deferred, shown as preview only`);
       }
       if (a.payload.dimensions?.[0]) setDimension(a.payload.dimensions[0]);
       if (a.payload.metrics?.[0]) setMetricName(a.payload.metrics[0]);
-      showToast("Applied to chart — review the preview");
+      showToast("Applied to chart. Review the preview.");
     } else if (a.type === "filter") {
       const f = a.payload.filters?.[0];
       if (f) {
@@ -357,14 +369,14 @@ export default function ExplorePage() {
         if ((SUPPORTED as string[]).includes(cfg.vizType)) setVizType(cfg.vizType as ExploreViz);
         if (cfg.dimension) setDimension(cfg.dimension);
         if (cfg.metric) setMetricName(cfg.metric);
-        if (cfg.datasetId !== ds.id) {
+        if (ds && cfg.datasetId !== ds.id) {
           const target = datasets.find((d) => d.id === cfg.datasetId);
           if (target) onDatasetChange(target.id);
         }
-        showToast("Generated chart applied — inspect the preview");
+        showToast("New chart applied. Inspect the preview.");
       }
     } else {
-      showToast("Explanation — no chart change to apply");
+      showToast("That was an explanation, so no chart change to apply.");
     }
   };
 
@@ -373,7 +385,10 @@ export default function ExplorePage() {
     bigNumber,
     metricLabel,
   } = useMemo(
-    () => (ds ? aggregateForChart(ds, dimension, metricName, rowLimit) : { rows: [] as { label: string; value: number }[], bigNumber: null, metricLabel: "—" }),
+    () =>
+      ds
+        ? aggregateForChart(ds, dimension, metricName, rowLimit)
+        : { rows: [] as { label: string; value: number }[], bigNumber: null, metricLabel: "—" },
     [ds, dimension, metricName, rowLimit],
   );
 
@@ -389,11 +404,13 @@ export default function ExplorePage() {
     () => (ds ? buildSql(ds, dimension, metricName, rowLimit) : "-- loading dataset…"),
     [ds, dimension, metricName, rowLimit],
   );
-  const selectedMetric = ds ? (ds.metrics.find((m) => m.name === metricName) ?? null) : null;
+  const selectedMetric = ds
+    ? ((ds.metrics ?? []).find((m) => m.name === metricName) ?? null)
+    : null;
 
   const onSave = async () => {
     if (!ds) {
-      showToast("No dataset loaded — cannot save");
+      showToast("No dataset loaded, so we cannot save.");
       return;
     }
     if (!saveName.trim()) {
@@ -418,13 +435,13 @@ export default function ExplorePage() {
         message?: string;
         error?: string;
       };
-      if (!res.ok) throw new Error(data.message || data.error || "Save failed");
-      showToast(`Saved — "${data.chart?.name ?? saveName}" now in Chart List`);
+      if (!res.ok) throw new Error(data.message || data.error || "Could not save. Try again.");
+      showToast(`Saved. "${data.chart?.name ?? saveName}" is now in Chart List.`);
       setShowSave(false);
       setSaveName("");
       setSaveDesc("");
     } catch (e: unknown) {
-      showToast(e instanceof Error ? e.message : "Save failed");
+      showToast(e instanceof Error ? e.message : "Could not save. Try again.");
     } finally {
       setSaving(false);
     }
@@ -433,25 +450,32 @@ export default function ExplorePage() {
   return (
     <AppShell>
       <div className="flex min-h-[calc(100vh-44px)] flex-col">
-        <div className="border-border bg-card sticky top-[44px] z-20 border-b">
-          <div className="flex flex-wrap items-center gap-3 px-3 py-2.5 sm:px-4">
+        {/* Subheader — sits directly under AppShell's 44px sidebar header; z-20 keeps it below modals/drawers */}
+        <div className="border-border bg-card sticky top-[44px] z-20 border-b shadow-sm">
+          <div className="flex flex-wrap items-center gap-3 px-3 py-2 sm:px-4">
             <div className="flex items-center gap-2">
-              <span className="bg-primary text-primary-foreground grid h-7 w-7 place-items-center rounded-md">
-                <BarChart3 className="h-4 w-4" />
+              <span
+                className="bg-primary text-primary-foreground grid h-7 w-7 place-items-center rounded-md"
+                aria-hidden
+              >
+                <BarChart3 className="h-4 w-4 stroke-[1.75]" aria-hidden />
               </span>
-              <h1 className="text-sm font-semibold tracking-tight">Explore</h1>
+              <h1 className="text-sm font-semibold tracking-tight text-balance">Explore</h1>
               <span className="bg-info text-info-foreground hidden rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide sm:inline">
                 TANSTACK
               </span>
             </div>
-            <span className="bg-border hidden h-4 w-px sm:inline-block" />
+            <span className="bg-border hidden h-4 w-px self-center sm:inline-block" aria-hidden />
             <label className="flex items-center gap-1.5 text-xs">
-              <span className="text-muted-foreground hidden font-medium sm:inline">Dataset</span>
+              <span className="text-muted-foreground hidden text-[11px] font-medium tracking-wide sm:inline">
+                Dataset
+              </span>
               <div className="relative">
                 <select
                   value={datasetId ?? ""}
                   onChange={(e) => onDatasetChange(Number(e.target.value))}
-                  className="border-input bg-background h-8 rounded-md border pr-7 pl-2 text-xs font-medium"
+                  aria-label="Dataset"
+                  className="border-input bg-background hover:border-border focus-visible:ring-ring active:bg-muted/40 h-8 rounded-md border pr-7 pl-2 text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 motion-reduce:transition-none"
                   disabled={datasetsLoading || !!datasetsError}
                 >
                   {datasetsLoading ? (
@@ -468,17 +492,23 @@ export default function ExplorePage() {
                     ))
                   )}
                 </select>
-                <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2" />
+                <ChevronDown
+                  className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2 stroke-[1.75]"
+                  aria-hidden
+                />
               </div>
             </label>
-            <span className="bg-border hidden h-4 w-px sm:inline-block" />
+            <span className="bg-border hidden h-4 w-px self-center sm:inline-block" aria-hidden />
             <label className="flex items-center gap-1.5 text-xs">
-              <span className="text-muted-foreground hidden font-medium sm:inline">Chart</span>
+              <span className="text-muted-foreground hidden text-[11px] font-medium tracking-wide sm:inline">
+                Chart
+              </span>
               <div className="relative">
                 <select
                   value={vizType}
                   onChange={(e) => setVizType(e.target.value as ExploreViz)}
-                  className="border-input bg-background h-8 rounded-md border pr-7 pl-2 text-xs font-medium"
+                  aria-label="Chart type"
+                  className="border-input bg-background hover:border-border focus-visible:ring-ring active:bg-muted/40 h-8 rounded-md border pr-7 pl-2 text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                 >
                   {ALL_VIZ.map((v) => (
                     <option key={v} value={v}>
@@ -487,7 +517,10 @@ export default function ExplorePage() {
                     </option>
                   ))}
                 </select>
-                <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2" />
+                <ChevronDown
+                  className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2 stroke-[1.75]"
+                  aria-hidden
+                />
               </div>
             </label>
 
@@ -495,40 +528,54 @@ export default function ExplorePage() {
               <button
                 type="button"
                 onClick={() => setAiOpen((v) => !v)}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${aiOpen ? "border-ai bg-ai text-ai-foreground shadow" : "border-ai-border bg-ai-muted text-ai hover:bg-ai-muted/80"}`}
+                className={`focus-visible:ring-ring inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none active:opacity-90 motion-reduce:transition-none ${aiOpen ? "border-ai bg-ai text-ai-foreground shadow-sm" : "border-ai-border bg-ai-muted text-ai hover:bg-ai-muted/80"}`}
                 aria-expanded={aiOpen}
                 aria-label="Toggle conversational assistant"
                 title={aiOpen ? "Close assistant" : "Ask about this chart"}
               >
-                <Sparkles className="h-3.5 w-3.5" />
+                <Sparkles className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
                 <span className="hidden sm:inline">{aiOpen ? "Close AI" : "Ask AI"}</span>
-                <MessageSquare className="hidden h-3 w-3 sm:inline opacity-60" />
+                <MessageSquare
+                  className="hidden h-3 w-3 stroke-[1.75] opacity-60 sm:inline"
+                  aria-hidden
+                />
               </button>
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs"
-                onClick={() =>
-                  showToast("Run — preview is live; no extra query needed in this pass.")
-                }
+                className="active:bg-accent/80 h-8 text-xs focus-visible:ring-2 motion-reduce:transition-none"
+                onClick={() => showToast("Preview is live, no extra query needed.")}
               >
-                <Play className="mr-1 h-3.5 w-3.5" />
+                <Play className="mr-1 h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
                 Run
               </Button>
-              <Button size="sm" className="h-8 text-xs" onClick={() => setShowSave(true)}>
-                <Save className="mr-1 h-3.5 w-3.5" />
+              <Button
+                size="sm"
+                className="h-8 text-xs focus-visible:ring-2 active:opacity-90 motion-reduce:transition-none"
+                onClick={() => setShowSave(true)}
+              >
+                <Save className="mr-1 h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
                 Save chart
               </Button>
             </div>
           </div>
-          <p className="text-muted-foreground hidden border-t px-4 py-1.5 text-[11px] leading-relaxed sm:block">
+          <p className="text-muted-foreground hidden border-t px-4 py-2 text-[11px] leading-relaxed text-pretty sm:block">
             {datasetsError ? (
-              <span className="text-destructive">Failed to load datasets: {datasetsError}</span>
+              <span className="text-destructive font-medium">
+                Failed to load datasets: {datasetsError}
+              </span>
             ) : datasetsLoading ? (
               <span>Loading datasets…</span>
             ) : ds ? (
               <>
-                Preview is a <span className="font-medium">client-side aggregation of {ds.name}&apos;s sampleRows</span> ({ds.sampleRows?.length ?? 0} rows) — not a mock image. TanStack Charts renders the same <code className="bg-muted rounded px-1">ChartRenderer</code> that Dashboard View will reuse.
+                Preview is a{" "}
+                <span className="text-foreground font-medium">
+                  client-side aggregation of {ds.name}&apos;s sampleRows
+                </span>{" "}
+                ({ds.sampleRows?.length ?? 0} rows) — not a mock image. TanStack Charts renders the
+                same{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">ChartRenderer</code>{" "}
+                that Dashboard View reuses.
               </>
             ) : (
               <span>No dataset available.</span>
@@ -538,23 +585,24 @@ export default function ExplorePage() {
 
         <div className="relative flex flex-1 flex-col lg:flex-row">
           <aside className="border-border bg-card w-full shrink-0 border-b lg:w-[280px] lg:border-r lg:border-b-0">
-            <div className="space-y-4 p-3 sm:p-4">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-widest uppercase">
-                <Database className="h-3.5 w-3.5" />
+            <div className="space-y-5 p-4">
+              <div className="text-muted-foreground flex items-center gap-1.5 text-[10px] font-semibold tracking-[0.09em] uppercase select-none">
+                <Database className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
                 Data controls
-                <span className="text-muted-foreground font-normal normal-case">
-                  — DatasetColumn/Metric
+                <span className="font-mono font-normal tracking-normal normal-case opacity-70">
+                  · DatasetColumn / Metric
                 </span>
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-5">
                 <label className="space-y-1.5">
-                  <span className="text-xs font-medium">Dimension</span>
+                  <span className="text-xs font-medium tracking-tight">Dimension</span>
                   <div className="relative">
                     <select
                       value={dimension ?? ""}
                       onChange={(e) => setDimension(e.target.value || null)}
-                      className="border-input bg-background h-8 w-full rounded-md border px-2 pr-7 text-xs"
+                      aria-label="Dimension"
+                      className="border-input bg-background hover:border-border focus-visible:ring-ring active:bg-muted/40 h-8 w-full rounded-md border px-2 pr-7 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                     >
                       <option value="">(no grouping — total)</option>
                       {groupableCols.map((c) => (
@@ -563,69 +611,80 @@ export default function ExplorePage() {
                         </option>
                       ))}
                     </select>
-                    <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2" />
+                    <ChevronDown
+                      className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 stroke-[1.75]"
+                      aria-hidden
+                    />
                   </div>
-                  <span className="text-muted-foreground text-[11px]">
+                  <span className="text-muted-foreground text-[11px] leading-relaxed">
                     {groupableCols.length} groupable · from{" "}
-                    <code className="bg-muted rounded px-1">{ds.name}</code>
+                    <code className="bg-muted rounded px-1 font-mono text-[11px]">
+                      {ds?.name ?? "—"}
+                    </code>
                   </span>
                 </label>
 
                 <label className="space-y-1.5">
-                  <span className="text-xs font-medium">Metric</span>
+                  <span className="text-xs font-medium tracking-tight">Metric</span>
                   <div className="relative">
                     <select
                       value={metricName ?? ""}
                       onChange={(e) => setMetricName(e.target.value || null)}
-                      className="border-input bg-background h-8 w-full rounded-md border px-2 pr-7 text-xs"
+                      aria-label="Metric"
+                      className="border-input bg-background hover:border-border focus-visible:ring-ring active:bg-muted/40 h-8 w-full rounded-md border px-2 pr-7 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                     >
-                      {(ds.metrics ?? []).map((m) => (
+                      {(ds?.metrics ?? []).map((m) => (
                         <option key={m.name} value={m.name}>
                           {m.name} — {m.sqlExpression}
                         </option>
                       ))}
                     </select>
-                    <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2" />
+                    <ChevronDown
+                      className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 stroke-[1.75]"
+                      aria-hidden
+                    />
                   </div>
                   {selectedMetric?.description && (
-                    <span className="text-muted-foreground text-[11px]">
+                    <span className="text-muted-foreground block text-[11px] leading-relaxed text-pretty">
                       {selectedMetric.description}
                     </span>
                   )}
                   {selectedMetric?.d3Format && (
-                    <span className="bg-muted rounded px-1 py-0.5 font-mono text-[11px]">
+                    <span className="bg-muted rounded px-1.5 py-0.5 font-mono text-[11px]">
                       d3: {selectedMetric.d3Format}
                     </span>
                   )}
                 </label>
 
                 <label className="space-y-1.5">
-                  <span className="text-xs font-medium">Filters</span>
+                  <span className="text-xs font-medium tracking-tight">Filters</span>
                   <Input
                     value={filterText}
                     onChange={(e) => setFilterText(e.target.value)}
                     placeholder="Filter sample rows (e.g. paid, 42)…"
-                    className="h-8 text-xs"
+                    aria-label="Filter sample rows"
+                    className="placeholder:text-muted-foreground/70 h-8 text-xs focus-visible:ring-2"
                   />
-                  <span className="text-muted-foreground text-[11px]">
-                    Simple text match over sampleRows for this pass.
+                  <span className="text-muted-foreground text-[11px] leading-relaxed">
+                    Simple text match over sampleRows — filtered instantly.
                   </span>
                 </label>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium">Sort</span>
-                    <div className="border-input bg-muted text-muted-foreground rounded-md border px-2 py-1.5 text-xs">
+                    <span className="text-xs font-medium tracking-tight">Sort</span>
+                    <div className="border-input bg-muted text-muted-foreground rounded-md border px-2.5 py-2 text-xs">
                       Metric desc
                     </div>
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium">Row limit</span>
+                    <span className="text-xs font-medium tracking-tight">Row limit</span>
                     <div className="relative">
                       <select
                         value={rowLimit}
                         onChange={(e) => setRowLimit(Number(e.target.value))}
-                        className="border-input bg-background h-8 w-full rounded-md border px-2 pr-6 text-xs"
+                        aria-label="Row limit"
+                        className="border-input bg-background hover:border-border focus-visible:ring-ring active:bg-muted/40 h-8 w-full rounded-md border px-2 pr-6 text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                       >
                         {[5, 10, 25, 50].map((n) => (
                           <option key={n} value={n}>
@@ -633,13 +692,16 @@ export default function ExplorePage() {
                           </option>
                         ))}
                       </select>
-                      <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2" />
+                      <ChevronDown
+                        className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 stroke-[1.75]"
+                        aria-hidden
+                      />
                     </div>
                   </label>
                 </div>
 
-                <div className="space-y-1.5">
-                  <span className="text-xs font-medium">Viz type</span>
+                <div className="space-y-2.5">
+                  <span className="text-xs font-medium tracking-tight">Visualization</span>
                   <div className="grid grid-cols-4 gap-1.5">
                     {ALL_VIZ.slice(0, 8).map((v) => {
                       const active = vizType === v;
@@ -649,12 +711,14 @@ export default function ExplorePage() {
                         <button
                           key={v}
                           onClick={() => setVizType(v)}
-                          className={`flex flex-col items-center gap-1 rounded-md border px-1 py-2 text-[11px] font-medium transition-colors ${active ? "border-primary bg-primary text-primary-foreground" : ok ? "border-input bg-background hover:bg-muted" : "border-input bg-muted/40 text-muted-foreground"}`}
+                          aria-pressed={active}
+                          aria-label={ok ? v : `${v} — deferred`}
+                          className={`focus-visible:ring-ring flex flex-col items-center gap-1 rounded-md border px-1 py-2 text-[11px] font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none active:opacity-90 motion-reduce:transition-none ${active ? "border-primary bg-primary text-primary-foreground shadow-sm" : ok ? "border-input bg-card hover:bg-muted/60 hover:border-border active:bg-accent/60" : "border-input bg-muted/40 text-muted-foreground hover:bg-muted/60 active:bg-accent/40"}`}
                           title={ok ? v : `${v} — deferred (see ChartRenderer)`}
                           type="button"
                         >
-                          <Icon className="h-4 w-4" />
-                          <span className="leading-none">{v}</span>
+                          <Icon className="h-4 w-4 stroke-[1.75]" aria-hidden />
+                          <span className="leading-none tracking-tight">{v}</span>
                         </button>
                       );
                     })}
@@ -667,39 +731,49 @@ export default function ExplorePage() {
                         <button
                           key={v}
                           onClick={() => setVizType(v)}
-                          className={`flex flex-col items-center gap-1 rounded-md border px-1 py-2 text-[11px] font-medium ${active ? "border-primary bg-primary text-primary-foreground" : "border-input bg-muted/40 text-muted-foreground"}`}
+                          aria-pressed={active}
+                          aria-label={`${v} — deferred`}
+                          className={`focus-visible:ring-ring flex flex-col items-center gap-1 rounded-md border px-1 py-2 text-[11px] font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none active:opacity-90 motion-reduce:transition-none ${active ? "border-primary bg-primary text-primary-foreground shadow-sm" : "border-input bg-muted/40 text-muted-foreground hover:bg-muted/60 active:bg-accent/40"}`}
                           title={`${v} — deferred (see ChartRenderer)`}
                           type="button"
                         >
-                          <Icon className="h-4 w-4" />
-                          <span className="leading-none">{v}</span>
+                          <Icon className="h-4 w-4 stroke-[1.75]" aria-hidden />
+                          <span className="leading-none tracking-tight">{v}</span>
                         </button>
                       );
                     })}
                   </div>
-                  <span className="text-muted-foreground text-[11px]">
-                    8 live via TanStack (Bar/Line/Area/Scatter/Heatmap/Box Plot + Table/Big Number
-                    widgets) · rest deferred with reason in ChartRenderer.
+                  <span className="text-muted-foreground block text-[11px] leading-relaxed text-pretty">
+                    8 live via TanStack (Bar / Line / Area / Scatter / Heatmap / Box Plot + Table /
+                    Big Number) · rest deferred with reason.
                   </span>
                 </div>
 
-                <div className="border-border bg-muted/30 rounded-md border p-2.5">
+                <div className="border-border bg-muted/30 rounded-lg border p-3">
                   {datasetsError ? (
-                    <p className="text-destructive text-xs">Failed to load datasets: {datasetsError}</p>
+                    <p className="text-destructive text-xs font-medium">
+                      Failed to load datasets: {datasetsError}
+                    </p>
                   ) : datasetsLoading ? (
                     <p className="text-muted-foreground text-xs">Loading dataset…</p>
                   ) : ds ? (
                     <>
-                      <p className="text-xs font-medium">{ds.name}</p>
-                      <p className="text-muted-foreground mt-1 font-mono text-[11px]">{ds.source} · {ds.type}</p>
-                      <p className="text-muted-foreground mt-1 text-[11px]">
-                        {ds.columns.length} cols · {ds.metrics.length} metrics · {ds.sampleRows?.length ?? 0} sample rows
+                      <p className="text-xs font-medium tracking-tight text-balance">{ds.name}</p>
+                      <p className="text-muted-foreground mt-1 font-mono text-[11px]">
+                        {ds.source} · {ds.type}
+                      </p>
+                      <p className="text-muted-foreground mt-1 text-[11px] tabular-nums">
+                        {ds.columns.length} cols · {ds.metrics.length} metrics ·{" "}
+                        {ds.sampleRows?.length ?? 0} sample rows
                       </p>
                     </>
                   ) : (
                     <p className="text-muted-foreground text-xs">No dataset</p>
                   )}
-                  <Link to="/tablemodelview/list" className="text-primary mt-1 inline-block text-xs hover:underline">
+                  <Link
+                    to="/tablemodelview/list"
+                    className="text-primary focus-visible:ring-ring mt-2 inline-flex items-center gap-1 rounded-sm text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none active:opacity-80"
+                  >
                     Edit dataset →
                   </Link>
                 </div>
@@ -707,78 +781,129 @@ export default function ExplorePage() {
             </div>
           </aside>
 
-          <section className="min-w-0 flex-1 bg-[color-mix(in_oklch,var(--background),var(--muted)_6%)]">
-            <div className="flex items-center gap-2 border-b px-3 py-2">
-              <Eye className="text-muted-foreground h-3.5 w-3.5" />
-              <span className="text-xs font-semibold tracking-wide">Preview</span>
-              <span className="bg-border hidden h-3 w-px sm:inline-block" />
-              <span className="text-muted-foreground hidden text-xs sm:inline">
-                {datasetsLoading ? "Loading dataset…" : datasetsError ? "— error —" : ds ? `${ds.name} · ${vizType} ${dimension ? `by ${dimension}` : "(total)"} · ${metricLabel}${filterText ? ` · filtered` : ""}` : "No dataset"} · <span className="font-mono text-[11px]">ChartRenderer</span>
+          <section className="bg-background min-w-0 flex-1" aria-label="Chart preview">
+            <div className="border-border flex items-center gap-2 border-b px-3 py-2.5 sm:px-4">
+              <Eye
+                className="text-muted-foreground h-3.5 w-3.5 shrink-0 stroke-[1.75]"
+                aria-hidden
+              />
+              <span className="text-xs font-semibold tracking-tight">Preview</span>
+              <span className="bg-border hidden h-3 w-px self-center sm:inline-block" aria-hidden />
+              <span className="text-muted-foreground hidden truncate text-xs sm:inline">
+                {datasetsLoading
+                  ? "Loading dataset…"
+                  : datasetsError
+                    ? "— error —"
+                    : ds
+                      ? `${ds.name} · ${vizType} ${dimension ? `by ${dimension}` : "(total)"} · ${metricLabel}${filterText ? ` · filtered` : ""}`
+                      : "No dataset"}{" "}
+                · <span className="font-mono text-[11px]">ChartRenderer</span>
               </span>
-              <Link to="/chart/list" className="text-primary ml-auto hidden text-xs hover:underline sm:inline">
+              <Link
+                to="/chart/list"
+                className="text-primary focus-visible:ring-ring ml-auto hidden rounded-sm text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none active:opacity-80 sm:inline"
+              >
                 Chart List →
               </Link>
             </div>
 
-            <div className="p-3 sm:p-4">
+            <div className="p-4">
               {datasetsLoading ? (
-                <div className="border-border bg-card grid h-[360px] place-items-center rounded-lg border sm:h-[400px]">
-                  <p className="text-muted-foreground text-xs">Loading dataset…</p>
+                <div className="border-border bg-card grid h-[360px] place-items-center rounded-lg border p-4 sm:h-[400px]">
+                  <div className="flex flex-col items-center gap-3" aria-hidden>
+                    <div className="bg-muted h-8 w-32 animate-pulse rounded-md" />
+                    <div className="bg-muted h-3 w-48 animate-pulse rounded" />
+                  </div>
+                  <span className="sr-only">Loading dataset…</span>
                 </div>
               ) : datasetsError ? (
                 <div className="border-destructive/30 bg-destructive/10 grid h-[360px] place-items-center rounded-lg border p-4 text-center sm:h-[400px]">
-                  <p className="text-destructive text-xs">Failed to load dataset: {datasetsError}</p>
+                  <p className="text-destructive text-xs font-medium">
+                    Failed to load dataset: {datasetsError}
+                  </p>
                 </div>
               ) : !ds ? (
                 <div className="border-border bg-card grid h-[360px] place-items-center rounded-lg border p-4 text-center sm:h-[400px]">
                   <p className="text-muted-foreground text-xs">No dataset available.</p>
                 </div>
               ) : (
-              <div className="border-border bg-card min-h-[360px] overflow-hidden rounded-lg border shadow-sm">
-                <Suspense
-                  fallback={
-                    <div className="grid h-[360px] place-items-center sm:h-[400px]">
-                      <p className="text-muted-foreground text-xs">Loading chart…</p>
-                    </div>
-                  }
-                >
-                  <ChartRenderer
-                    vizType={vizType}
-                    data={chartRows}
-                    metricLabel={metricLabel}
-                    d3Format={selectedMetric?.d3Format}
-                    dataset={ds}
-                    dimension={dimension}
-                    showGrid={showGrid}
-                    showLegend={showLegend}
-                    rawRows={filterText ? filteredRows : (ds.sampleRows ?? [])}
-                    rowLimit={rowLimit}
-                  />
-                </Suspense>
-                <div className="border-border bg-muted/20 flex flex-wrap items-center gap-2 border-t px-3 py-2 text-[11px]">
-                  <span className="bg-muted rounded-full px-2 py-0.5 font-mono text-xs">{ds.name}</span>
-                  <span className="bg-border hidden h-3 w-px sm:inline-block" />
-                  <span className="text-muted-foreground">
-                    {vizType === "Table" || vizType === "Big Number"
-                      ? `${ds.sampleRows?.length ?? 0} sample rows`
-                      : `${chartRows.length} bucket${chartRows.length === 1 ? "" : "s"} · ${ds.sampleRows?.length ?? 0} sample rows`}{" "}
-                    · from <code className="bg-muted rounded px-1">{ds.source}</code> · TanStack <code className="bg-muted rounded px-1">ChartRenderer</code>
-                  </span>
+                <div className="border-border bg-card min-h-[360px] overflow-hidden rounded-lg border shadow-sm">
+                  <Suspense
+                    fallback={
+                      <div className="grid h-[360px] place-items-center sm:h-[400px]">
+                        <p className="text-muted-foreground text-xs">Loading chart…</p>
+                      </div>
+                    }
+                  >
+                    <ChartRenderer
+                      vizType={vizType}
+                      data={chartRows}
+                      metricLabel={metricLabel}
+                      d3Format={selectedMetric?.d3Format}
+                      dataset={ds}
+                      dimension={dimension}
+                      showGrid={showGrid}
+                      showLegend={showLegend}
+                      rawRows={filterText ? filteredRows : (ds.sampleRows ?? [])}
+                      rowLimit={rowLimit}
+                    />
+                  </Suspense>
+                  <div className="border-border bg-muted/20 flex flex-wrap items-center gap-2 border-t px-3 py-2.5 text-[11px]">
+                    <span className="bg-muted rounded-full px-2 py-0.5 font-mono text-xs">
+                      {ds.name}
+                    </span>
+                    <span
+                      className="bg-border hidden h-3 w-px self-center sm:inline-block"
+                      aria-hidden
+                    />
+                    <span className="text-muted-foreground leading-relaxed">
+                      {vizType === "Table" || vizType === "Big Number"
+                        ? `${ds.sampleRows?.length ?? 0} sample rows`
+                        : `${chartRows.length} bucket${chartRows.length === 1 ? "" : "s"} · ${ds.sampleRows?.length ?? 0} sample rows`}{" "}
+                      · from{" "}
+                      <code className="bg-muted rounded px-1 font-mono text-[11px]">
+                        {ds.source}
+                      </code>{" "}
+                      · TanStack{" "}
+                      <code className="bg-muted rounded px-1 font-mono text-[11px]">
+                        ChartRenderer
+                      </code>
+                    </span>
+                  </div>
                 </div>
-              </div>
               )}
 
-              <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
-                Preview runs in the browser against <code className="bg-muted rounded px-1">sampleRows</code> (DatasetColumn/DatasetMetric from <code className="bg-muted rounded px-1">src/types/dataset.ts</code>) and <code className="bg-muted rounded px-1">src/components/charts/ChartRenderer.tsx</code>. TanStack chunk is lazy-loaded via <code className="bg-muted rounded px-1">React.lazy</code>/<code className="bg-muted rounded px-1">Suspense</code> so it doesn&apos;t bloat the initial page load.
+              <p className="text-muted-foreground mt-3 text-[11px] leading-relaxed text-pretty">
+                Preview runs in the browser against{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">sampleRows</code>{" "}
+                (DatasetColumn / DatasetMetric from{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">
+                  src/types/dataset.ts
+                </code>
+                ) and{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">
+                  src/components/charts/ChartRenderer.tsx
+                </code>
+                . TanStack chunk is lazy-loaded via{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">React.lazy</code> /{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">Suspense</code> so it
+                doesn&apos;t bloat the initial load.
                 {bigNumber != null && vizType !== "Table" && vizType !== "Big Number" && (
-                  <span className="font-mono text-[11px]"> · total {metricLabel}: {formatNumber(bigNumber, selectedMetric?.d3Format)}</span>
+                  <span className="font-mono text-[11px] tabular-nums">
+                    {" "}
+                    · total {metricLabel}: {formatNumber(bigNumber, selectedMetric?.d3Format)}
+                  </span>
                 )}
               </p>
             </div>
           </section>
 
           <aside className="border-border bg-card w-full shrink-0 border-t lg:w-[340px] lg:border-t-0 lg:border-l">
-            <div className="flex gap-1 border-b p-1">
+            <div
+              className="bg-muted/20 flex gap-1 border-b p-1.5"
+              role="tablist"
+              aria-label="Explore panels"
+            >
               {(
                 [
                   ["Data", Database],
@@ -790,29 +915,35 @@ export default function ExplorePage() {
                 <button
                   key={label}
                   onClick={() => setActiveTab(label)}
-                  className={`flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium ${activeTab === label ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                  role="tab"
+                  aria-selected={activeTab === label}
+                  className={`focus-visible:ring-ring flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-2 text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none active:opacity-90 motion-reduce:transition-none ${activeTab === label ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground active:bg-accent/60"}`}
                   type="button"
                 >
-                  <Icon className="h-3.5 w-3.5" /> {label}
+                  <Icon className="h-3.5 w-3.5 shrink-0 stroke-[1.75]" aria-hidden /> {label}
                 </button>
               ))}
             </div>
 
-            <div className="max-h-[58vh] overflow-auto p-3 sm:p-4 lg:max-h-[calc(100vh-88px)]">
+            <div className="max-h-[58vh] overflow-auto p-4 lg:max-h-[calc(100vh-88px)]">
               {activeTab === "Data" && (
-                <div className="space-y-4">
-                  <div className="space-y-1.5">
-                    <p className="text-xs font-semibold tracking-wide">Dataset</p>
-                    <div className="border-border bg-muted/30 rounded-md border p-2.5">
+                <div className="space-y-5">
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold tracking-tight">Dataset</p>
+                    <div className="border-border bg-muted/30 rounded-lg border p-3">
                       {datasetsLoading ? (
                         <p className="text-muted-foreground text-xs">Loading…</p>
                       ) : datasetsError ? (
-                        <p className="text-destructive text-xs">{datasetsError}</p>
+                        <p className="text-destructive text-xs font-medium">{datasetsError}</p>
                       ) : ds ? (
                         <>
-                          <p className="text-xs font-medium">{ds.name}</p>
+                          <p className="text-xs font-medium tracking-tight text-balance">
+                            {ds.name}
+                          </p>
                           <p className="text-muted-foreground font-mono text-[11px]">{ds.source}</p>
-                          <p className="text-muted-foreground mt-1 text-[11px]">{ds.description ?? "—"}</p>
+                          <p className="text-muted-foreground mt-1.5 text-[11px] leading-relaxed text-pretty">
+                            {ds.description ?? "—"}
+                          </p>
                         </>
                       ) : (
                         <p className="text-muted-foreground text-xs">No dataset</p>
@@ -820,27 +951,30 @@ export default function ExplorePage() {
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <p className="text-xs font-medium">Query mode</p>
-                    <div className="border-input bg-muted text-muted-foreground rounded-md border px-2 py-1.5 text-xs">
+                    <p className="text-xs font-medium tracking-tight">Query mode</p>
+                    <div className="border-input bg-muted text-muted-foreground rounded-md border px-2.5 py-2 text-xs">
                       Aggregate (group + metric)
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <p className="text-xs font-medium">Time range</p>
-                    <div className="border-input bg-muted text-muted-foreground rounded-md border px-2 py-1.5 text-xs">
+                    <p className="text-xs font-medium tracking-tight">Time range</p>
+                    <div className="border-input bg-muted text-muted-foreground rounded-md border px-2.5 py-2 text-xs">
                       Not wired yet — deferred
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <p className="text-xs font-medium">Row limit</p>
-                    <p className="text-muted-foreground text-[11px]">
-                      Caps grouped buckets (Bar/Line/Area/Scatter/Heatmap/Box) and raw rows (Table).
-                      Current: {rowLimit}
+                    <p className="text-xs font-medium tracking-tight">Row limit</p>
+                    <p className="text-muted-foreground text-[11px] leading-relaxed text-pretty">
+                      Caps grouped buckets (Bar / Line / Area / Scatter / Heatmap / Box) and raw
+                      rows (Table). Current:{" "}
+                      <span className="text-foreground font-mono font-medium tabular-nums">
+                        {rowLimit}
+                      </span>
                     </p>
                   </div>
                   <div className="space-y-1.5">
-                    <p className="text-xs font-medium">URL parameters</p>
-                    <p className="text-muted-foreground text-[11px]">
+                    <p className="text-xs font-medium tracking-tight">URL parameters</p>
+                    <p className="text-muted-foreground text-[11px] leading-relaxed text-pretty">
                       Deferred — would reflect Explore state in the URL like Superset does.
                     </p>
                   </div>
@@ -848,113 +982,133 @@ export default function ExplorePage() {
               )}
 
               {activeTab === "Customize" && (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold tracking-wide">TanStack style</p>
-                    <label className="flex items-center gap-2 text-xs">
+                <div className="space-y-5">
+                  <div className="space-y-2.5">
+                    <p className="text-xs font-semibold tracking-tight">TanStack style</p>
+                    <label className="flex items-center gap-2 text-xs font-medium">
                       <input
                         type="checkbox"
                         checked={showLegend}
                         onChange={(e) => setShowLegend(e.target.checked)}
-                        className="accent-primary h-3.5 w-3.5"
+                        className="accent-primary focus-visible:ring-ring h-3.5 w-3.5 rounded-sm focus-visible:ring-2 focus-visible:ring-offset-0"
                       />
                       Legend
                     </label>
-                    <label className="flex items-center gap-2 text-xs">
+                    <label className="flex items-center gap-2 text-xs font-medium">
                       <input
                         type="checkbox"
                         checked={showGrid}
                         onChange={(e) => setShowGrid(e.target.checked)}
-                        className="accent-primary h-3.5 w-3.5"
+                        className="accent-primary focus-visible:ring-ring h-3.5 w-3.5 rounded-sm focus-visible:ring-2 focus-visible:ring-offset-0"
                       />
                       Grid
                     </label>
                   </div>
-                  <div className="border-border bg-muted/40 rounded-md border p-2.5">
-                    <p className="text-xs font-medium">Colors & tooltips are tokens</p>
-                    <p className="text-muted-foreground mt-1 text-[11px] leading-relaxed">
+                  <div className="border-border bg-muted/40 rounded-lg border p-3">
+                    <p className="text-xs font-medium tracking-tight">
+                      Colors & tooltips are tokens
+                    </p>
+                    <p className="text-muted-foreground mt-1.5 text-[11px] leading-relaxed text-pretty">
                       Fills use{" "}
-                      <code className="bg-background rounded border px-1">var(--chart-1)</code>…
-                      <code className="bg-background rounded border px-1">var(--chart-5)</code>,
-                      grid uses{" "}
-                      <code className="bg-background rounded border px-1">var(--border)</code>,
-                      ticks use{" "}
-                      <code className="bg-background rounded border px-1">
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
+                        var(--chart-1)
+                      </code>
+                      …
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
+                        var(--chart-5)
+                      </code>
+                      , grid uses{" "}
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
+                        var(--border)
+                      </code>
+                      , ticks use{" "}
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
                         var(--muted-foreground)
                       </code>{" "}
                       + Space Grotesk, tooltips via{" "}
-                      <code className="bg-background rounded border px-1">tooltip</code> extension
-                      themed with{" "}
-                      <code className="bg-background rounded border px-1">var(--card)</code>/
-                      <code className="bg-background rounded border px-1">var(--border)</code>. See{" "}
-                      <code className="bg-background rounded border px-1">ChartRenderer.tsx</code> —
-                      no stock TanStack defaults leak.
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
+                        tooltip
+                      </code>{" "}
+                      extension themed with{" "}
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
+                        var(--card)
+                      </code>
+                      /
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
+                        var(--border)
+                      </code>
+                      . See{" "}
+                      <code className="bg-background rounded border px-1 font-mono text-[11px]">
+                        ChartRenderer.tsx
+                      </code>{" "}
+                      — no stock TanStack defaults.
                     </p>
                   </div>
-                  <div className="space-y-1.5">
-                    <p className="text-xs font-medium">Color scheme</p>
-                    <div className="flex gap-1.5">
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium tracking-tight">Color scheme</p>
+                    <div className="flex gap-1.5" aria-hidden>
                       <span
-                        className="h-6 w-6 rounded-full"
+                        className="h-6 w-6 rounded-full border border-black/5 shadow-sm"
                         style={{ background: "var(--chart-1)" }}
                         title="chart-1"
                       />
                       <span
-                        className="h-6 w-6 rounded-full"
+                        className="h-6 w-6 rounded-full border border-black/5 shadow-sm"
                         style={{ background: "var(--chart-2)" }}
                         title="chart-2"
                       />
                       <span
-                        className="h-6 w-6 rounded-full"
+                        className="h-6 w-6 rounded-full border border-black/5 shadow-sm"
                         style={{ background: "var(--chart-3)" }}
                         title="chart-3"
                       />
                       <span
-                        className="h-6 w-6 rounded-full"
+                        className="h-6 w-6 rounded-full border border-black/5 shadow-sm"
                         style={{ background: "var(--chart-4)" }}
                         title="chart-4"
                       />
                       <span
-                        className="h-6 w-6 rounded-full"
+                        className="h-6 w-6 rounded-full border border-black/5 shadow-sm"
                         style={{ background: "var(--chart-5)" }}
                         title="chart-5"
                       />
                     </div>
-                    <p className="text-muted-foreground text-[11px]">
-                      Picker beyond this default palette is deferred (Known Gaps).
+                    <p className="text-muted-foreground text-[11px] leading-relaxed">
+                      Picker beyond this default palette is deferred.
                     </p>
                   </div>
                 </div>
               )}
 
               {activeTab === "Query" && (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div className="flex items-center gap-2">
-                    <p className="text-xs font-semibold tracking-wide">Rendered SQL</p>
+                    <p className="text-xs font-semibold tracking-tight">Rendered SQL</p>
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(sql);
                         showToast("SQL copied");
                       }}
-                      className="border-input bg-background hover:bg-muted rounded border px-2 py-1 text-[11px] font-medium"
+                      className="border-input bg-background hover:bg-muted focus-visible:ring-ring active:bg-accent/60 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                       type="button"
                     >
                       Copy
                     </button>
                   </div>
-                  <pre className="border-editor-border bg-editor text-editor-foreground overflow-auto rounded-md border p-3 font-mono text-[11px] leading-relaxed">
+                  <pre className="border-editor-border bg-editor text-editor-foreground overflow-auto rounded-lg border p-3 font-mono text-[11px] leading-relaxed">
                     {sql}
                   </pre>
-                  <p className="text-muted-foreground text-[11px]">
-                    Derived from the dimension/metric/limit controls — inspectable, not a black box.
+                  <p className="text-muted-foreground text-[11px] leading-relaxed text-pretty">
+                    Derived from the dimension / metric / limit controls — inspectable, not a black
+                    box.
                   </p>
-                  <div className="border-border bg-muted/30 rounded-md border p-2.5">
-                    <p className="text-xs font-medium">Query JSON (shape)</p>
-                    <pre className="text-muted-foreground mt-1 overflow-auto font-mono text-[11px]">
+                  <div className="border-border bg-muted/30 rounded-lg border p-3">
+                    <p className="text-xs font-medium tracking-tight">Query JSON (shape)</p>
+                    <pre className="text-muted-foreground mt-1.5 overflow-auto font-mono text-[11px] leading-relaxed">
                       {JSON.stringify(
                         {
-                          dataset: ds.name,
-                          source: ds.source,
+                          dataset: ds?.name ?? "—",
+                          source: ds?.source ?? "—",
                           vizType,
                           dimension,
                           metric: metricName,
@@ -970,48 +1124,52 @@ export default function ExplorePage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-7 text-xs"
+                      className="active:bg-accent/80 h-7 text-xs focus-visible:ring-2 motion-reduce:transition-none"
                       onClick={() =>
-                        showToast("Run is live — preview already reflects your controls.")
+                        showToast("Preview is live and already reflects your controls.")
                       }
                     >
-                      <Play className="mr-1 h-3 w-3" /> Run
+                      <Play className="mr-1 h-3 w-3 stroke-[1.75]" aria-hidden /> Run
                     </Button>
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="h-7 text-xs"
-                      onClick={() => showToast("Stop — no async query in this pass.")}
+                      className="active:bg-accent/60 h-7 text-xs motion-reduce:transition-none"
+                      onClick={() => showToast("No async query to stop.")}
                     >
-                      <X className="mr-1 h-3 w-3" /> Stop
+                      <X className="mr-1 h-3 w-3 stroke-[1.75]" aria-hidden /> Stop
                     </Button>
                   </div>
                 </div>
               )}
 
               {activeTab === "Results" && (
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold tracking-wide">Tabular results</p>
-                  <p className="text-muted-foreground text-[11px]">
-                    Rows backing the preview — paginated to {rowLimit}.
+                <div className="space-y-4">
+                  <p className="text-xs font-semibold tracking-tight">Tabular results</p>
+                  <p className="text-muted-foreground text-[11px] leading-relaxed">
+                    Rows backing the preview — paginated to{" "}
+                    <span className="font-mono font-medium tabular-nums">{rowLimit}</span>.
                   </p>
-                  <div className="border-border overflow-auto rounded-md border">
+                  <div className="border-border overflow-hidden rounded-lg border">
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-muted/40 text-muted-foreground border-b text-left">
-                          <th className="px-2 py-1.5 font-mono text-[11px]">
+                          <th className="px-2.5 py-2 font-mono text-[11px] font-medium tracking-wide">
                             {dimension ?? "label"}
                           </th>
-                          <th className="px-2 py-1.5 text-right font-mono text-[11px]">
+                          <th className="px-2.5 py-2 text-right font-mono text-[11px] font-medium tracking-wide">
                             {metricLabel}
                           </th>
                         </tr>
                       </thead>
                       <tbody className="divide-border divide-y">
                         {chartRows.slice(0, rowLimit).map((r) => (
-                          <tr key={r.label} className="hover:bg-muted/40">
-                            <td className="px-2 py-1.5">{r.label}</td>
-                            <td className="px-2 py-1.5 text-right font-mono text-[11px]">
+                          <tr
+                            key={r.label}
+                            className="hover:bg-muted/40 transition-colors duration-150 motion-reduce:transition-none"
+                          >
+                            <td className="px-2.5 py-2 tracking-tight">{r.label}</td>
+                            <td className="px-2.5 py-2 text-right font-mono text-[11px] tabular-nums">
                               {formatNumber(r.value, selectedMetric?.d3Format)}
                             </td>
                           </tr>
@@ -1019,12 +1177,12 @@ export default function ExplorePage() {
                       </tbody>
                     </table>
                     {chartRows.length === 0 && (
-                      <p className="text-muted-foreground px-3 py-6 text-center text-xs">
-                        No rows — pick a dimension/metric.
+                      <p className="text-muted-foreground px-3 py-8 text-center text-xs">
+                        No rows — pick a dimension / metric.
                       </p>
                     )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
                         const csv = [
@@ -1035,20 +1193,20 @@ export default function ExplorePage() {
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement("a");
                         a.href = url;
-                        a.download = `${ds.name}-${vizType}.csv`;
+                        a.download = `${ds?.name ?? "chart"}-${vizType}.csv`;
                         a.click();
                         URL.revokeObjectURL(url);
                       }}
-                      className="border-input bg-background hover:bg-muted rounded-md border px-2 py-1.5 text-xs font-medium"
+                      className="border-input bg-background hover:bg-muted focus-visible:ring-ring active:bg-accent/60 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                       type="button"
                     >
                       Export CSV
                     </button>
-                    <span className="text-muted-foreground self-center text-[11px]">
+                    <span className="text-muted-foreground text-[11px] tabular-nums">
                       {chartRows.length} buckets
                     </span>
                   </div>
-                  <p className="text-muted-foreground text-[11px]">
+                  <p className="text-muted-foreground text-[11px] leading-relaxed">
                     Column stats: {chartRows.length} groups · single metric — richer stats deferred.
                   </p>
                 </div>
@@ -1063,37 +1221,43 @@ export default function ExplorePage() {
                 type="button"
                 aria-label="Close assistant"
                 onClick={() => setAiOpen(false)}
-                className="absolute inset-0 z-30 bg-black/20 backdrop-blur-[1px] lg:bg-black/10"
+                className="absolute inset-0 z-30 bg-black/20 backdrop-blur-[1px]"
               />
-              <div className="absolute inset-x-0 bottom-0 z-30 flex max-h-[72vh] flex-col rounded-t-xl border-t bg-card shadow-2xl lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[380px] lg:max-h-none lg:rounded-none lg:border-t-0 lg:border-l">
-                <div className="flex items-center gap-2 border-b px-3 py-2.5">
-                  <span className="bg-ai text-ai-foreground grid h-7 w-7 place-items-center rounded-md">
-                    <Sparkles className="h-4 w-4" />
+              <div className="bg-card absolute inset-x-0 bottom-0 z-30 flex max-h-[72vh] flex-col rounded-t-xl border-t shadow-2xl lg:inset-y-0 lg:right-0 lg:left-auto lg:max-h-none lg:w-[380px] lg:rounded-none lg:border-t-0 lg:border-l">
+                <div className="flex items-center gap-2.5 border-b px-3 py-3">
+                  <span
+                    className="bg-ai text-ai-foreground grid h-7 w-7 place-items-center rounded-md"
+                    aria-hidden
+                  >
+                    <Sparkles className="h-4 w-4 stroke-[1.75]" aria-hidden />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold tracking-tight">Ask about this chart</p>
+                    <p className="text-xs font-semibold tracking-tight text-balance">
+                      Ask about this chart
+                    </p>
                     <p className="text-muted-foreground text-[11px] leading-none">
                       Copilot — suggests, never auto-applies
                     </p>
                   </div>
                   <span className="bg-ai-muted border-ai-border hidden rounded-full border px-2 py-0.5 font-mono text-[10px] tracking-wide sm:inline">
-                    MOCK · template + real schema
+                    MOCK · real schema
                   </span>
                   <button
                     type="button"
                     onClick={() => setAiOpen(false)}
-                    className="text-muted-foreground hover:text-foreground grid h-7 w-7 place-items-center rounded-md"
+                    className="text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring active:bg-accent/60 grid h-7 w-7 place-items-center rounded-md transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
+                    aria-label="Close assistant"
                   >
-                    <X className="h-4 w-4" />
+                    <X className="h-4 w-4 stroke-[1.75]" aria-hidden />
                   </button>
                 </div>
 
-                <div ref={aiScrollRef} className="flex-1 overflow-auto p-3 sm:p-4">
+                <div ref={aiScrollRef} className="flex-1 overflow-auto p-4">
                   <div className="space-y-3">
                     {aiExchanges.length === 0 && !aiBusy && (
                       <div className="border-ai-border bg-ai-muted/40 rounded-lg border border-dashed p-3">
-                        <p className="text-xs font-medium">Try asking</p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
+                        <p className="text-xs font-medium tracking-tight">Try asking</p>
+                        <div className="mt-2.5 flex flex-wrap gap-1.5">
                           {[
                             "make it a line chart",
                             "filter to published orders only",
@@ -1104,17 +1268,24 @@ export default function ExplorePage() {
                               key={s}
                               type="button"
                               onClick={() => sendAi(s)}
-                              className="border-ai-border bg-card hover:bg-ai-muted rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                              className="border-ai-border bg-card hover:bg-ai-muted focus-visible:ring-ring active:bg-accent/60 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                             >
                               {s}
                             </button>
                           ))}
                         </div>
-                        <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
-                          The assistant reads <code className="bg-card rounded border px-1">Dataset</code> ·{" "}
-                          <code className="bg-card rounded border px-1">{ds.source}</code> and replies with a
-                          reviewable action + the exact SQL. Hit <span className="font-medium">Apply</span> to
-                          mutate the chart — nothing changes until you do.
+                        <p className="text-muted-foreground mt-2.5 text-[11px] leading-relaxed text-pretty">
+                          The assistant reads{" "}
+                          <code className="bg-card rounded border px-1 font-mono text-[11px]">
+                            Dataset
+                          </code>{" "}
+                          ·{" "}
+                          <code className="bg-card rounded border px-1 font-mono text-[11px]">
+                            {ds?.source ?? "—"}
+                          </code>{" "}
+                          and replies with a reviewable action + the exact SQL. Hit{" "}
+                          <span className="text-foreground font-medium">Apply</span> to mutate the
+                          chart — nothing changes until you do.
                         </p>
                       </div>
                     )}
@@ -1132,48 +1303,72 @@ export default function ExplorePage() {
                         : "No action — explanation";
                       const tables = r.tablesUsed?.join(", ") ?? "—";
                       return (
-                        <div key={ex.id} className="border-border bg-card overflow-hidden rounded-lg border shadow-sm">
+                        <div
+                          key={ex.id}
+                          className="border-border bg-card overflow-hidden rounded-lg border shadow-sm"
+                        >
                           <div className="bg-muted/30 border-b px-3 py-2">
-                            <p className="text-xs font-medium">You → {ex.prompt}</p>
+                            <p className="text-xs font-medium tracking-tight text-balance">
+                              You → {ex.prompt}
+                            </p>
                           </div>
-                          <div className="space-y-2 p-3">
+                          <div className="space-y-2.5 p-3">
                             <p
-                              className="text-xs leading-relaxed"
+                              className="text-xs leading-relaxed text-pretty"
                               dangerouslySetInnerHTML={{
                                 __html: r.reply
                                   .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-                                  .replace(/`([^`]+)`/g, '<code class="bg-muted rounded px-1 font-mono text-[11px]">$1</code>'),
+                                  .replace(
+                                    /`([^`]+)`/g,
+                                    '<code class="bg-muted rounded px-1 font-mono text-[11px]">$1</code>',
+                                  ),
                               }}
                             />
-                            <div className="bg-ai-muted border-ai-border flex flex-wrap items-center gap-1.5 rounded-md border px-2 py-1.5">
-                              <span className="text-ai text-[11px] font-semibold">{actionLabel}</span>
-                              <span className="bg-ai-border hidden h-3 w-px sm:inline-block" />
-                              <span className="text-muted-foreground font-mono text-[10px]">tables: {tables}</span>
+                            <div className="bg-ai-muted border-ai-border flex flex-wrap items-center gap-1.5 rounded-md border px-2.5 py-1.5">
+                              <span className="text-ai text-[11px] font-semibold">
+                                {actionLabel}
+                              </span>
+                              <span
+                                className="bg-ai-border hidden h-3 w-px self-center sm:inline-block"
+                                aria-hidden
+                              />
+                              <span className="text-muted-foreground font-mono text-[10px] tabular-nums">
+                                tables: {tables}
+                              </span>
                             </div>
                             {r.sql && (
                               <details className="group">
-                                <summary className="text-muted-foreground hover:text-foreground cursor-pointer list-none text-[11px] font-medium">
-                                  <span className="group-open:hidden">▸ View SQL (inspectable)</span>
+                                <summary className="text-muted-foreground hover:text-foreground cursor-pointer list-none text-[11px] font-medium transition-colors duration-150 motion-reduce:transition-none">
+                                  <span className="group-open:hidden">
+                                    ▸ View SQL (inspectable)
+                                  </span>
                                   <span className="hidden group-open:inline">▾ Hide SQL</span>
                                 </summary>
-                                <pre className="border-ai-border bg-editor text-editor-foreground mt-1.5 overflow-auto rounded-md border p-2 font-mono text-[11px] leading-relaxed">
+                                <pre className="border-ai-border bg-editor text-editor-foreground mt-2 overflow-auto rounded-md border p-3 font-mono text-[11px] leading-relaxed">
                                   {r.sql}
                                 </pre>
                               </details>
                             )}
                             <div className="flex gap-1.5 pt-1">
-                              <Button size="sm" className="bg-ai text-ai-foreground hover:bg-ai/90 h-7 text-xs" onClick={() => applyExchange(ex)} disabled={!r.action}>
+                              <Button
+                                size="sm"
+                                className="bg-ai text-ai-foreground hover:bg-ai/90 h-7 text-xs focus-visible:ring-2 active:opacity-90 motion-reduce:transition-none"
+                                onClick={() => applyExchange(ex)}
+                                disabled={!r.action}
+                              >
                                 Apply
                               </Button>
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                className="h-7 text-xs"
-                                onClick={() => setAiExchanges((prev) => prev.filter((p) => p.id !== ex.id))}
+                                className="active:bg-accent/60 h-7 text-xs motion-reduce:transition-none"
+                                onClick={() =>
+                                  setAiExchanges((prev) => prev.filter((p) => p.id !== ex.id))
+                                }
                               >
                                 Dismiss
                               </Button>
-                              <span className="text-muted-foreground ml-auto self-center hidden text-[10px] sm:inline">
+                              <span className="text-muted-foreground ml-auto hidden self-center text-[10px] sm:inline">
                                 Not auto-applied — explicit confirm required
                               </span>
                             </div>
@@ -1184,27 +1379,35 @@ export default function ExplorePage() {
 
                     {aiBusy && (
                       <div className="border-ai-border bg-ai-muted/30 flex items-center gap-2 rounded-lg border p-3 text-xs">
-                        <Loader2 className="text-ai h-4 w-4 animate-spin" />
-                        Thinking — reading {ds.name} schema…
+                        <Loader2
+                          className="text-ai h-4 w-4 animate-spin stroke-[1.75]"
+                          aria-hidden
+                        />
+                        Thinking — reading {ds?.name ?? "dataset"} schema…
                       </div>
                     )}
                     {aiError && (
-                      <div className="border-destructive/30 bg-destructive/10 rounded-lg border p-3 text-xs text-destructive">
+                      <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-xs font-medium">
                         {aiError}
                       </div>
                     )}
                     {aiExchanges.length > 4 && (
-                      <p className="text-muted-foreground text-center text-[11px]">Showing the 4 most recent exchanges.</p>
+                      <p className="text-muted-foreground text-center text-[11px]">
+                        Showing the 4 most recent exchanges.
+                      </p>
                     )}
                   </div>
-                  <p className="text-muted-foreground mt-4 text-center text-[11px]">
-                    This panel and the “Ask AI” NL2SQL bar in SQL Lab are separate surfaces — both use the same
-                    server-side mock (<code className="bg-muted rounded px-1">x-mock-ai: 1</code>) but different
-                    prompts and context.
+                  <p className="text-muted-foreground mt-4 text-center text-[11px] leading-relaxed text-pretty">
+                    This panel and the “Ask AI” NL2SQL bar in SQL Lab are separate surfaces — both
+                    use the same server-side mock (
+                    <code className="bg-muted rounded px-1 font-mono text-[11px]">
+                      x-mock-ai: 1
+                    </code>
+                    ) but different prompts and context.
                   </p>
                 </div>
 
-                <div className="border-t bg-card p-3">
+                <div className="bg-card border-t p-3">
                   <div className="flex gap-2">
                     <Input
                       value={aiInput}
@@ -1216,11 +1419,17 @@ export default function ExplorePage() {
                         }
                       }}
                       placeholder="Ask about this chart…"
-                      className="h-9 flex-1 text-xs"
+                      aria-label="Ask about this chart"
+                      className="placeholder:text-muted-foreground/70 h-9 flex-1 text-xs focus-visible:ring-2"
                       disabled={aiBusy}
                     />
-                    <Button size="sm" className="bg-ai text-ai-foreground hover:bg-ai/90 h-9 px-3" onClick={() => sendAi()} disabled={aiBusy || !aiInput.trim()}>
-                      <Send className="h-3.5 w-3.5" />
+                    <Button
+                      size="sm"
+                      className="bg-ai text-ai-foreground hover:bg-ai/90 h-9 px-3 focus-visible:ring-2 active:opacity-90 motion-reduce:transition-none"
+                      onClick={() => sendAi()}
+                      disabled={aiBusy || !aiInput.trim()}
+                    >
+                      <Send className="h-3.5 w-3.5 stroke-[1.75]" aria-hidden />
                     </Button>
                   </div>
                   <p className="text-muted-foreground mt-1.5 text-[11px]">
@@ -1234,47 +1443,59 @@ export default function ExplorePage() {
 
         {showSave && (
           <div className="fixed inset-0 z-40 grid place-items-center bg-black/30 p-4 backdrop-blur-sm">
-            <div className="border-border bg-card w-full max-w-[520px] rounded-lg border p-4 shadow-xl">
+            <div className="border-border bg-card w-full max-w-[520px] rounded-xl border p-5 shadow-xl">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold">Save chart</p>
+                <p className="text-sm font-semibold tracking-tight text-balance">Save chart</p>
                 <button
                   onClick={() => setShowSave(false)}
-                  className="text-muted-foreground hover:text-foreground grid h-7 w-7 place-items-center rounded-md"
+                  className="text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring active:bg-accent/60 grid h-7 w-7 place-items-center rounded-md transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none motion-reduce:transition-none"
                   type="button"
+                  aria-label="Close"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-4 w-4 stroke-[1.75]" aria-hidden />
                 </button>
               </div>
-              <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
-                This writes to <code className="bg-muted rounded px-1">POST /api/charts</code> (Postgres via Drizzle) — so it appears in Chart List immediately. Same <code className="bg-muted rounded px-1">Chart</code> contract Chart List already reads.
+              <p className="text-muted-foreground mt-1.5 text-xs leading-relaxed text-pretty">
+                This writes to{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">
+                  POST /api/charts
+                </code>{" "}
+                (Postgres via Drizzle) — so it appears in Chart List immediately. Same{" "}
+                <code className="bg-muted rounded px-1 font-mono text-[11px]">Chart</code> contract
+                Chart List already reads.
               </p>
               <div className="mt-4 space-y-3">
                 <label className="space-y-1.5">
-                  <span className="text-xs font-medium">Chart name *</span>
+                  <span className="text-xs font-medium tracking-tight">Chart name *</span>
                   <Input
                     value={saveName}
                     onChange={(e) => setSaveName(e.target.value)}
                     placeholder={`${metricLabel} by ${dimension ?? "total"} — ${vizType}`}
-                    className="h-9 text-sm"
+                    aria-label="Chart name"
+                    className="placeholder:text-muted-foreground/70 h-9 text-sm focus-visible:ring-2"
                   />
                 </label>
                 <label className="space-y-1.5">
-                  <span className="text-xs font-medium">Description</span>
+                  <span className="text-xs font-medium tracking-tight">Description</span>
                   <textarea
                     value={saveDesc}
                     onChange={(e) => setSaveDesc(e.target.value)}
                     placeholder="What this chart shows…"
                     rows={2}
-                    className="border-input bg-background w-full rounded-md border px-3 py-2 text-xs"
+                    className="border-input bg-background placeholder:text-muted-foreground/70 focus-visible:ring-ring w-full rounded-md border px-3 py-2 text-xs leading-relaxed focus-visible:ring-2 focus-visible:outline-none"
                   />
                 </label>
-                <div className="bg-muted/40 rounded-md px-3 py-2 font-mono text-[11px] leading-relaxed">
-                  dataset <span className="font-semibold">{ds?.name ?? "—"}</span> · {ds?.source ?? "—"} · {vizType} · {dimension ?? "(no dim)"} / {metricLabel}
+                <div className="bg-muted/40 rounded-lg border px-3 py-2.5 font-mono text-[11px] leading-relaxed">
+                  dataset{" "}
+                  <span className="text-foreground font-semibold tabular-nums">
+                    {ds?.name ?? "—"}
+                  </span>{" "}
+                  · {ds?.source ?? "—"} · {vizType} · {dimension ?? "(no dim)"} / {metricLabel}
                 </div>
-                <div className="bg-muted/40 flex items-center gap-2 rounded-md px-3 py-2 text-xs">
+                <div className="bg-muted/40 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs">
                   <span className="text-muted-foreground">Preview buckets</span>
-                  <span className="bg-border h-3 w-px" />
-                  <span className="font-mono text-[11px]">
+                  <span className="bg-border h-3 w-px self-center" aria-hidden />
+                  <span className="font-mono text-[11px] tabular-nums">
                     {chartRows
                       .map((r) => `${r.label}: ${formatNumber(r.value, selectedMetric?.d3Format)}`)
                       .slice(0, 3)
@@ -1282,12 +1503,12 @@ export default function ExplorePage() {
                   </span>
                 </div>
               </div>
-              <div className="mt-4 flex justify-end gap-2">
+              <div className="mt-5 flex justify-end gap-2">
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => setShowSave(false)}
-                  className="h-8 text-xs"
+                  className="active:bg-accent/60 h-8 text-xs motion-reduce:transition-none"
                 >
                   Cancel
                 </Button>
@@ -1295,7 +1516,7 @@ export default function ExplorePage() {
                   size="sm"
                   onClick={onSave}
                   disabled={saving || !saveName.trim()}
-                  className="h-8 text-xs"
+                  className="h-8 text-xs focus-visible:ring-2 active:opacity-90 motion-reduce:transition-none"
                 >
                   {saving ? "Saving…" : "Save to Chart List"}
                 </Button>
@@ -1304,7 +1525,7 @@ export default function ExplorePage() {
                 After save:{" "}
                 <button
                   onClick={() => navigate("/chart/list")}
-                  className="text-primary hover:underline"
+                  className="text-primary focus-visible:ring-ring rounded-sm font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none active:opacity-80"
                   type="button"
                 >
                   View in Chart List →
@@ -1315,7 +1536,11 @@ export default function ExplorePage() {
         )}
 
         {toast && (
-          <div className="border-border bg-card fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border px-3 py-2 text-sm shadow-lg">
+          <div
+            role="status"
+            aria-live="polite"
+            className="border-border bg-card animate-in fade-in slide-in-from-bottom-1 fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border px-3 py-2 text-sm font-medium shadow-lg duration-200 motion-reduce:animate-none"
+          >
             {toast}
           </div>
         )}

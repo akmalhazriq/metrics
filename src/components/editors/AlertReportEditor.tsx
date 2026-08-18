@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock3, FlaskConical, LayoutDashboard, Mail, Send, SlidersHorizontal, X } from "lucide-react";
+import {
+  Clock3,
+  FlaskConical,
+  LayoutDashboard,
+  Mail,
+  Send,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +25,13 @@ type Props = {
   onTest: (payload: Record<string, unknown>) => void;
 };
 
-const TIMEZONES = ["UTC", "America/Los_Angeles", "America/New_York", "Europe/London", "Asia/Singapore"];
+const TIMEZONES = [
+  "UTC",
+  "America/Los_Angeles",
+  "America/New_York",
+  "Europe/London",
+  "Asia/Singapore",
+];
 const DELIVERY = ["email", "slack", "webhook"] as const;
 const VALIDATION = ["not_null", "operator", "value_comparison"] as const;
 
@@ -34,7 +48,9 @@ function humanizeCron(cron: string) {
 
 export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest }: Props) {
   const isAlert = mode === "alert";
-  const [tab, setTab] = useState<"condition" | "schedule" | "content">(isAlert ? "condition" : "schedule");
+  const [tab, setTab] = useState<"condition" | "schedule" | "content">(
+    isAlert ? "condition" : "schedule",
+  );
   const [saving, setSaving] = useState(false);
 
   // form state — single object so Save always has full payload
@@ -57,7 +73,9 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
       schedule: (init.schedule as string) ?? "0 9 * * MON",
       timezone: (init.timezone as string) ?? "UTC",
       deliveryType: (init.deliveryType as string) ?? "email",
-      recipients: Array.isArray(init.recipients) ? (init.recipients as string[]).join(", ") : (init.recipients as string) ?? "",
+      recipients: Array.isArray(init.recipients)
+        ? (init.recipients as string[]).join(", ")
+        : ((init.recipients as string) ?? ""),
       message: (init.message as string) ?? "",
       logRetentionDays: String((init.logRetentionDays as number) ?? 30),
       dashboardId: init.dashboardId != null ? String(init.dashboardId) : "",
@@ -71,14 +89,22 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
 
   useEffect(() => {
     if (!open || isAlert) return;
-    fetch("/api/dashboards?pageSize=50").then((r) => r.json()).then((j: { data: { id: number; title: string }[] }) => setDashOpts(j.data ?? [])).catch(() => {});
-    fetch("/api/charts?pageSize=50").then((r) => r.json()).then((j: { data: { id: number; name: string }[] }) => setChartOpts(j.data ?? [])).catch(() => {});
+    fetch("/api/dashboards?pageSize=50")
+      .then((r) => r.json())
+      .then((j: { data: { id: number; title: string }[] }) => setDashOpts(j.data ?? []))
+      .catch(() => {});
+    fetch("/api/charts?pageSize=50")
+      .then((r) => r.json())
+      .then((j: { data: { id: number; name: string }[] }) => setChartOpts(j.data ?? []))
+      .catch(() => {});
   }, [open, isAlert]);
 
   useEffect(() => {
     if (open) document.body.style.overflow = "hidden";
     else document.body.style.overflow = "";
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [open]);
 
   const cronHint = useMemo(() => humanizeCron(String(form.schedule ?? "")), [form.schedule]);
@@ -97,7 +123,10 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
       schedule: String(form.schedule ?? "").trim() || "0 9 * * MON",
       timezone: String(form.timezone ?? "UTC"),
       deliveryType: String(form.deliveryType ?? "email"),
-      recipients: String(form.recipients ?? "").split(",").map((s: string) => s.trim()).filter(Boolean),
+      recipients: String(form.recipients ?? "")
+        .split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean),
       message: String(form.message ?? "").trim() || null,
       logRetentionDays: Number(form.logRetentionDays ?? 30) || 30,
       active: !!form.active,
@@ -111,11 +140,20 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
       payload.chartId = form.chartId ? Number(form.chartId) : null;
       const fv = String(form.filterValues ?? "").trim();
       if (fv) {
-        try { payload.filterValues = JSON.parse(fv); } catch { payload.filterValues = fv; }
+        try {
+          payload.filterValues = JSON.parse(fv);
+        } catch {
+          payload.filterValues = fv;
+        }
       } else payload.filterValues = null;
     }
     setSaving(true);
-    try { await onSave(payload); onClose(); } finally { setSaving(false); }
+    try {
+      await onSave(payload);
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const tabs: { id: typeof tab; label: string; icon: typeof Clock3 }[] = isAlert
@@ -130,18 +168,29 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
 
   return (
     <div className="fixed inset-0 z-40 flex">
-      <button aria-label="Close editor" onClick={onClose} className="bg-foreground/20 flex-1 backdrop-blur-sm" />
+      <button
+        aria-label="Close editor"
+        onClick={onClose}
+        className="bg-foreground/20 flex-1 backdrop-blur-sm"
+      />
       <div className="bg-card border-border flex w-full max-w-[640px] flex-col border-l shadow-xl">
         <div className="border-border flex items-start justify-between gap-4 border-b px-5 py-4">
           <div>
             <h2 className="text-[18px] font-semibold tracking-tight">
-              {initial ? `Edit ${isAlert ? "alert" : "report"}` : `Add ${isAlert ? "alert" : "report"}`}
+              {initial
+                ? `Edit ${isAlert ? "alert" : "report"}`
+                : `Add ${isAlert ? "alert" : "report"}`}
             </h2>
             <p className="text-muted-foreground mt-1 max-w-[44ch] text-xs leading-relaxed">
-              {isAlert ? "SQL check + threshold → notify when the condition is met." : "Pick a dashboard or chart to deliver on a schedule."}
+              {isAlert
+                ? "SQL check + threshold → notify when the condition is met."
+                : "Pick a dashboard or chart to deliver on a schedule."}
             </p>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:bg-accent grid h-8 w-8 place-items-center rounded-md">
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:bg-accent grid h-8 w-8 place-items-center rounded-md"
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -158,7 +207,12 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
             </button>
           ))}
           <label className="ml-auto flex items-center gap-2 text-xs font-medium">
-            <input type="checkbox" checked={!!form.active} onChange={(e) => set("active", e.target.checked)} className="accent-primary h-3.5 w-3.5" />
+            <input
+              type="checkbox"
+              checked={!!form.active}
+              onChange={(e) => set("active", e.target.checked)}
+              className="accent-primary h-3.5 w-3.5"
+            />
             {form.active ? "Enabled" : "Paused"}
           </label>
         </div>
@@ -170,26 +224,51 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Validation type</span>
                   <div className="relative">
-                    <select value={String(form.validationType ?? "")} onChange={(e) => set("validationType", e.target.value)} className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm">
+                    <select
+                      value={String(form.validationType ?? "")}
+                      onChange={(e) => set("validationType", e.target.value)}
+                      className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
+                    >
                       <option value="">—</option>
-                      {VALIDATION.map((v) => <option key={v} value={v}>{v}</option>)}
+                      {VALIDATION.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
                     </select>
                     <SlidersHorizontal className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2" />
                   </div>
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Threshold</span>
-                  <Input value={String(form.threshold ?? "")} onChange={(e) => set("threshold", e.target.value)} placeholder="500" />
+                  <Input
+                    value={String(form.threshold ?? "")}
+                    onChange={(e) => set("threshold", e.target.value)}
+                    placeholder="500"
+                  />
                 </label>
               </div>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium">Trigger</span>
-                <Input value={String(form.trigger ?? "")} onChange={(e) => set("trigger", e.target.value)} placeholder="Threshold / SQL check" />
+                <Input
+                  value={String(form.trigger ?? "")}
+                  onChange={(e) => set("trigger", e.target.value)}
+                  placeholder="Threshold / SQL check"
+                />
               </label>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium">SQL query</span>
-                <textarea value={String(form.sqlQuery ?? "")} onChange={(e) => set("sqlQuery", e.target.value)} rows={6} placeholder="SELECT COUNT(*) FROM orders WHERE updated_at < NOW() - INTERVAL '6 hours'" className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-xs" style={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace' }} />
-                <span className="text-muted-foreground text-[11px]">Runs on schedule; rows returned vs threshold decides trigger.</span>
+                <textarea
+                  value={String(form.sqlQuery ?? "")}
+                  onChange={(e) => set("sqlQuery", e.target.value)}
+                  rows={6}
+                  placeholder="SELECT COUNT(*) FROM orders WHERE updated_at < NOW() - INTERVAL '6 hours'"
+                  className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-xs"
+                  style={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}
+                />
+                <span className="text-muted-foreground text-[11px]">
+                  Runs on schedule; rows returned vs threshold decides trigger.
+                </span>
               </label>
             </div>
           )}
@@ -199,24 +278,49 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Name *</span>
-                  <Input value={String(form.name ?? "")} onChange={(e) => set("name", e.target.value)} placeholder={isAlert ? "Revenue drop — last 24h" : "Executive KPI — Weekly"} />
+                  <Input
+                    value={String(form.name ?? "")}
+                    onChange={(e) => set("name", e.target.value)}
+                    placeholder={isAlert ? "Revenue drop, last 24h" : "Executive KPI, Weekly"}
+                  />
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Type</span>
-                  <Input value={String(form.type ?? "")} onChange={(e) => set("type", e.target.value)} placeholder={isAlert ? "Alert" : "Report"} />
+                  <Input
+                    value={String(form.type ?? "")}
+                    onChange={(e) => set("type", e.target.value)}
+                    placeholder={isAlert ? "Alert" : "Report"}
+                  />
                 </label>
               </div>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium">Cron expression *</span>
-                <Input value={String(form.schedule ?? "")} onChange={(e) => set("schedule", e.target.value)} placeholder="0 9 * * MON" className="font-mono text-xs" />
-                <span className="text-muted-foreground text-[11px]">{cronHint} — e.g. <code className="bg-muted rounded px-1">0 9 * * MON</code> = Every Monday at 9am · <code className="bg-muted rounded px-1">0 */6 * * *</code> = Every 6 hours</span>
+                <Input
+                  value={String(form.schedule ?? "")}
+                  onChange={(e) => set("schedule", e.target.value)}
+                  placeholder="0 9 * * MON"
+                  className="font-mono text-xs"
+                />
+                <span className="text-muted-foreground text-[11px]">
+                  {cronHint}, for example <code className="bg-muted rounded px-1">0 9 * * MON</code>{" "}
+                  = Every Monday at 9am · <code className="bg-muted rounded px-1">0 */6 * * *</code>{" "}
+                  = Every 6 hours
+                </span>
               </label>
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Timezone</span>
                   <div className="relative">
-                    <select value={String(form.timezone ?? "UTC")} onChange={(e) => set("timezone", e.target.value)} className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm">
-                      {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
+                    <select
+                      value={String(form.timezone ?? "UTC")}
+                      onChange={(e) => set("timezone", e.target.value)}
+                      className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
+                    >
+                      {TIMEZONES.map((tz) => (
+                        <option key={tz} value={tz}>
+                          {tz}
+                        </option>
+                      ))}
                     </select>
                     <Clock3 className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2" />
                   </div>
@@ -224,24 +328,54 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Delivery</span>
                   <div className="relative">
-                    <select value={String(form.deliveryType ?? "email")} onChange={(e) => set("deliveryType", e.target.value)} className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm">
-                      {DELIVERY.map((d) => <option key={d} value={d}>{d}</option>)}
+                    <select
+                      value={String(form.deliveryType ?? "email")}
+                      onChange={(e) => set("deliveryType", e.target.value)}
+                      className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
+                    >
+                      {DELIVERY.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
                     </select>
                     <Mail className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2" />
                   </div>
                 </label>
               </div>
               <label className="space-y-1.5">
-                <span className="text-xs font-medium">Recipients — comma separated</span>
-                <textarea value={String(form.recipients ?? "")} onChange={(e) => set("recipients", e.target.value)} rows={2} placeholder={String(form.deliveryType) === "slack" ? "#data-alerts, #ops" : String(form.deliveryType) === "webhook" ? "https://hooks.example.com/alert" : "ops@example.com, revops@example.com"} className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-xs" />
+                <span className="text-xs font-medium">Recipients, comma separated</span>
+                <textarea
+                  value={String(form.recipients ?? "")}
+                  onChange={(e) => set("recipients", e.target.value)}
+                  rows={2}
+                  placeholder={
+                    String(form.deliveryType) === "slack"
+                      ? "#data-alerts, #ops"
+                      : String(form.deliveryType) === "webhook"
+                        ? "https://hooks.example.com/alert"
+                        : "ops@example.com, revops@example.com"
+                  }
+                  className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-xs"
+                />
               </label>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium">Message</span>
-                <textarea value={String(form.message ?? "")} onChange={(e) => set("message", e.target.value)} rows={2} placeholder="Human-readable context included with the notification." className="border-input bg-background w-full rounded-md border px-3 py-2 text-xs" />
+                <textarea
+                  value={String(form.message ?? "")}
+                  onChange={(e) => set("message", e.target.value)}
+                  rows={2}
+                  placeholder="Human-readable context included with the notification."
+                  className="border-input bg-background w-full rounded-md border px-3 py-2 text-xs"
+                />
               </label>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium">Log retention (days)</span>
-                <Input type="number" value={String(form.logRetentionDays ?? "30")} onChange={(e) => set("logRetentionDays", e.target.value)} />
+                <Input
+                  type="number"
+                  value={String(form.logRetentionDays ?? "30")}
+                  onChange={(e) => set("logRetentionDays", e.target.value)}
+                />
               </label>
             </div>
           )}
@@ -252,9 +386,17 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Dashboard (optional)</span>
                   <div className="relative">
-                    <select value={String(form.dashboardId ?? "")} onChange={(e) => set("dashboardId", e.target.value)} className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm">
+                    <select
+                      value={String(form.dashboardId ?? "")}
+                      onChange={(e) => set("dashboardId", e.target.value)}
+                      className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
+                    >
                       <option value="">— none —</option>
-                      {dashOpts.map((d) => <option key={d.id} value={String(d.id)}>{d.title}</option>)}
+                      {dashOpts.map((d) => (
+                        <option key={d.id} value={String(d.id)}>
+                          {d.title}
+                        </option>
+                      ))}
                     </select>
                     <LayoutDashboard className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2" />
                   </div>
@@ -262,19 +404,39 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium">Chart (optional)</span>
                   <div className="relative">
-                    <select value={String(form.chartId ?? "")} onChange={(e) => set("chartId", e.target.value)} className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm">
+                    <select
+                      value={String(form.chartId ?? "")}
+                      onChange={(e) => set("chartId", e.target.value)}
+                      className="border-input bg-background h-9 w-full rounded-md border px-3 pr-8 text-sm"
+                    >
                       <option value="">— none —</option>
-                      {chartOpts.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                      {chartOpts.map((c) => (
+                        <option key={c.id} value={String(c.id)}>
+                          {c.name}
+                        </option>
+                      ))}
                     </select>
                     <SlidersHorizontal className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2" />
                   </div>
                 </label>
               </div>
-              <p className="text-muted-foreground text-[11px]">Pick a dashboard or a chart. At least one should be set; both is allowed. The export will render that target with the filter values below.</p>
+              <p className="text-muted-foreground text-[11px]">
+                Pick a dashboard or a chart. At least one should be set; both is allowed. The export
+                will render that target with the filter values below.
+              </p>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium">Filter values (JSON)</span>
-                <textarea value={String(form.filterValues ?? "")} onChange={(e) => set("filterValues", e.target.value)} rows={5} placeholder='{"region": "all", "grain": "weekly"}' className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-xs" style={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace' }} />
-                <span className="text-muted-foreground text-[11px]">Applied to the dashboard at send time.</span>
+                <textarea
+                  value={String(form.filterValues ?? "")}
+                  onChange={(e) => set("filterValues", e.target.value)}
+                  rows={5}
+                  placeholder='{"region": "all", "grain": "weekly"}'
+                  className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-xs"
+                  style={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}
+                />
+                <span className="text-muted-foreground text-[11px]">
+                  Applied to the dashboard at send time.
+                </span>
               </label>
             </div>
           )}
@@ -284,9 +446,20 @@ export function AlertReportEditor({ mode, open, onClose, initial, onSave, onTest
           <Button variant="outline" size="sm" onClick={() => onTest(form)}>
             <Send className="mr-1.5 h-3.5 w-3.5" /> Test
           </Button>
-          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" className="ml-auto" disabled={saving || !String(form.name ?? "").trim()} onClick={handleSave}>
-            {saving ? "Saving…" : initial ? "Save changes" : `Create ${isAlert ? "alert" : "report"}`}
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            className="ml-auto"
+            disabled={saving || !String(form.name ?? "").trim()}
+            onClick={handleSave}
+          >
+            {saving
+              ? "Saving…"
+              : initial
+                ? "Save changes"
+                : `Create ${isAlert ? "alert" : "report"}`}
           </Button>
         </div>
       </div>

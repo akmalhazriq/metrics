@@ -29,9 +29,10 @@ export default class RootErrorBoundary extends React.Component<Props, State> {
                 <AlertTriangle className="h-5 w-5" />
               </span>
               <div className="min-w-0 flex-1">
-                <h1 className="text-base font-semibold tracking-tight">Something went wrong</h1>
+                <h1 className="text-base font-semibold tracking-tight">Oops, that broke</h1>
                 <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
-                  The page failed to render. This is usually a temporary issue — try reloading.
+                  The page failed to render. This is usually temporary. Try reloading and it should
+                  come back.
                 </p>
                 <p className="bg-muted border-border mt-3 rounded-md border px-3 py-2 font-mono text-[11px] leading-relaxed break-words">
                   {truncated}

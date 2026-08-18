@@ -6,16 +6,16 @@ labels: enhancement
 
 ## Is your feature request related to a problem? Please describe.
 
-A clear description of the problem. For example: "I'm always frustrated when ..."
+What is getting in your way? For example: "I get frustrated when ..."
 
-## Describe the solution you'd like
+## Describe the solution you would like
 
-A clear, concise description of what you want to happen.
+How would you like it to work?
 
 ## Alternatives considered
 
-Any alternative solutions or features you've considered.
+Any other approaches you thought about.
 
 ## Additional context
 
-Add any other context, mockups, or links. If this relates to a gap listed in `CLAUDE.md` (Known Gaps / Roadmap), mention which one.
+Anything else, mockups or links that help explain it. If this ties to a gap listed in `CLAUDE.md` (Known gaps or Roadmap), say which one.

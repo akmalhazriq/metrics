@@ -17,7 +17,13 @@ const PAGE_SIZE = 25;
 
 function formatCellValue(v: unknown): { text: string; isNumber: boolean } {
   if (v == null) return { text: "—", isNumber: false };
-  if (typeof v === "number") return { text: Number.isFinite(v) ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(v), isNumber: true };
+  if (typeof v === "number")
+    return {
+      text: Number.isFinite(v)
+        ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+        : String(v),
+      isNumber: true,
+    };
   if (typeof v === "boolean") return { text: v ? "true" : "false", isNumber: false };
   if (v instanceof Date) return { text: v.toISOString(), isNumber: false };
   // Try ISO date string
@@ -63,7 +69,10 @@ export function DrillDetailModal({ open, onOpenChange, title, subtitle, columns,
   const start = (safePage - 1) * PAGE_SIZE;
   const end = Math.min(start + PAGE_SIZE, total);
   const pageRows = rows.slice(start, end);
-  const showingText = total === 0 ? "No rows" : `Showing ${start + 1}–${end} of ${total} row${total === 1 ? "" : "s"}`;
+  const showingText =
+    total === 0
+      ? "No rows"
+      : `Showing ${start + 1} to ${end} of ${total} row${total === 1 ? "" : "s"}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -90,10 +99,20 @@ export function DrillDetailModal({ open, onOpenChange, title, subtitle, columns,
                 {title}
               </h2>
             </div>
-            {subtitle && <p className="text-muted-foreground mt-1 text-xs leading-relaxed">{subtitle}</p>}
-            <p className="text-muted-foreground mt-1 font-mono text-[11px]">{showingText} · {columns.length} column{columns.length === 1 ? "" : "s"}</p>
+            {subtitle && (
+              <p className="text-muted-foreground mt-1 text-xs leading-relaxed">{subtitle}</p>
+            )}
+            <p className="text-muted-foreground mt-1 font-mono text-[11px]">
+              {showingText} · {columns.length} column{columns.length === 1 ? "" : "s"}
+            </p>
           </div>
-          <Button variant="ghost" size="sm" className="h-7 w-7 shrink-0 p-0" onClick={() => onOpenChange(false)} aria-label="Close">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 shrink-0 p-0"
+            onClick={() => onOpenChange(false)}
+            aria-label="Close"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -105,9 +124,9 @@ export function DrillDetailModal({ open, onOpenChange, title, subtitle, columns,
               <div className="bg-muted grid h-10 w-10 place-items-center rounded-full">
                 <Table2 className="text-muted-foreground h-5 w-5" />
               </div>
-              <p className="mt-3 text-sm font-medium">No rows match this filter</p>
+              <p className="mt-3 text-sm font-medium">Nothing matches that filter</p>
               <p className="text-muted-foreground mt-1 max-w-[44ch] text-xs leading-relaxed">
-                Try a different bar or clear the active cross-filters above the canvas.
+                Try a different bar or clear the filters above the chart.
               </p>
             </div>
           ) : (
@@ -115,9 +134,14 @@ export function DrillDetailModal({ open, onOpenChange, title, subtitle, columns,
               <thead className="bg-muted/40 text-muted-foreground sticky top-0 z-10 border-b">
                 <tr className="text-left">
                   {columns.map((c) => (
-                    <th key={c.name} className="border-border whitespace-nowrap border-b px-3 py-2 font-mono text-[11px] font-semibold tracking-wide">
+                    <th
+                      key={c.name}
+                      className="border-border border-b px-3 py-2 font-mono text-[11px] font-semibold tracking-wide whitespace-nowrap"
+                    >
                       <span className="text-foreground">{c.name}</span>
-                      <span className="text-muted-foreground ml-1.5 font-normal">{c.type.toLowerCase()}</span>
+                      <span className="text-muted-foreground ml-1.5 font-normal">
+                        {c.type.toLowerCase()}
+                      </span>
                     </th>
                   ))}
                 </tr>
@@ -126,7 +150,9 @@ export function DrillDetailModal({ open, onOpenChange, title, subtitle, columns,
                 {pageRows.map((r, i) => (
                   <tr key={i} className="hover:bg-muted/40">
                     {columns.map((c) => {
-                      const { text, isNumber } = formatCellValue((r as Record<string, unknown>)[c.name]);
+                      const { text, isNumber } = formatCellValue(
+                        (r as Record<string, unknown>)[c.name],
+                      );
                       return (
                         <td
                           key={c.name}
@@ -149,18 +175,35 @@ export function DrillDetailModal({ open, onOpenChange, title, subtitle, columns,
           <span className="text-muted-foreground font-mono text-[11px]">{showingText}</span>
           {total > PAGE_SIZE && (
             <div className="flex items-center gap-1">
-              <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={safePage <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
                 <ChevronLeft className="mr-1 h-3.5 w-3.5" /> Prev
               </Button>
               <span className="text-muted-foreground px-2 font-mono text-[11px]">
                 Page {safePage} of {totalPages}
               </span>
-              <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={safePage >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={safePage >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
                 Next <ChevronRight className="ml-1 h-3.5 w-3.5" />
               </Button>
             </div>
           )}
-          <Button variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-7 text-xs"
+            onClick={() => onOpenChange(false)}
+          >
             Close
           </Button>
         </div>
