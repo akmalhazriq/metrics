@@ -1,31 +1,32 @@
-# Dockerfile
+# Use Node 20 on Linux (fixes both the Node version and the native binding issues)
+FROM node:20-slim AS builder
 
-# Step 1: Use Node.js base image
-FROM node:18 AS build
-
-# Step 2: Set working directory
 WORKDIR /app
 
-# Step 3: Copy package.json and package-lock.json
+# Copy package files and install dependencies
+# Running npm install on Linux ensures the correct oxc-transform binaries are downloaded
 COPY package*.json ./
+RUN npm install
 
-# Step 4: Install dependencies with legacy peer dependencies option
-RUN npm install --legacy-peer-deps
-
-# Step 5: Copy the rest of the application code
+# Copy the rest of the code and build
 COPY . .
-
-# Step 6: Build the application
 RUN npm run build
 
-# Step 7: Use a lightweight web server for the production build
-FROM nginx:alpine AS production
+# --- Production Stage ---
+FROM node:20-slim AS runner
 
-# Step 8: Copy built files from the previous stage
-COPY --from=build /app/dist /usr/share/nginx/html
+WORKDIR /app
 
-# Expose port 80 to access the app
-EXPOSE 80
+# Copy only the necessary files from the builder
+COPY --from=builder /app/.output ./.output
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
 
-# Start Nginx server
-CMD ["nginx", "-g", "daemon off;"]
+# Set production environment
+ENV NODE_ENV=production
+# Nitro listens to process.env.PORT automatically, which Railway injects
+ENV PORT=3000
+EXPOSE 3000
+
+# Start the Nitro server
+CMD ["node", ".output/server/index.mjs"]
