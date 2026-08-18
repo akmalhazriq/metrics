@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ArrowLeft, Eye, Pencil, Plus, Save, Search, Trash2, Type, FileText, BarChart3, LayoutGrid } from "lucide-react";
 

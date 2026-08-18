@@ -85,17 +85,51 @@ The dev server serves both the React frontend and the Nitro/H3 API on the same o
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite + Nitro dev server on `http://localhost:5000` (frontend + `/api/*` same origin) |
-| `npm run build` | `tsc` type-check, then Vite production build |
-| `npm run preview` | Preview the production build |
+| `npm run build` | `tsc` type-check, then Vite + Nitro production build (outputs `dist/` + `.output/server/index.mjs`) |
+| `npm run start` | Run the Nitro production server (`node .output/server/index.mjs`, respects `PORT`/`NITRO_PORT`) |
+| `npm run preview` | Preview the production build (Vite preview, dev only) |
 | `npm run lint` | ESLint (`typescript-eslint`, `--max-warnings 0`) |
 | `npm run lint-staged` | Prettier `--write` + `eslint --fix` (Husky pre-commit, `concurrent: false`) |
-| `npm run db:push` | Drizzle Kit push — sync `src/db/schema.ts` to Postgres (dev, no migration file) |
+| `npm run db:push` | Drizzle Kit push — sync `src/db/schema.ts` to Postgres (dev only, no migration file) |
 | `npm run db:seed` | Seed DB from `src/data/*` via `tsx src/db/seed.ts` |
 | `npm run db:generate` | Drizzle Kit generate — create SQL migration in `drizzle/` |
-| `npm run db:migrate` | Drizzle Kit migrate — apply migrations |
+| `npm run db:migrate` | Drizzle Kit migrate — apply migrations from `drizzle/` (production path) |
 | `npm run db:studio` | Drizzle Studio — browser UI for the DB |
 
 > No test runner is configured (no jest / vitest / playwright). `npm run lint` enforces `--max-warnings 0`.
+
+## Deployment
+
+Production is a standalone Node.js server — no separate frontend/backend deploy. The Vite build emits `dist/` (static assets) and `.output/server/index.mjs` (Nitro/H3 server that co-serves both).
+
+### One-time setup (Railway / Render + Neon / Supabase)
+
+```bash
+# 1. Set environment variables on the host (see Configuration table above).
+#    DATABASE_URL must be the pooled connection string from Neon/Supabase,
+#    including ?sslmode=require. PORT and NODE_ENV are usually injected
+#    automatically by the host.
+
+# 2. Deploy — the host runs these on each release:
+npm ci
+npm run build          # tsc + vite build → .output/server/index.mjs
+npm run db:migrate     # applies drizzle/ migrations to the production DB (run once per release, before start)
+npm run start          # node .output/server/index.mjs — listens on $PORT (defaults to 3000 if unset)
+```
+
+For local production smoke-test:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/metrics_bi npm run build
+PORT=3001 npm run start   # or: NODE_ENV=production npm run start
+```
+
+> **Migrations vs push.** `db:push` is dev-only (direct schema sync, no history). Production uses versioned migrations: `db:generate` creates `drizzle/*.sql`, `db:migrate` applies them. Never run `db:push` against production — it can drop data. The app does **not** auto-migrate on boot (avoids race conditions when multiple instances start); the deploy pipeline must run `db:migrate` explicitly.
+
+### CORS & sessions
+
+- **Co-served** — Frontend and API share the same origin (`/api/*` via the Nitro Vite plugin), so no CORS is needed. If you ever split them, add a `routeRules` CORS block in a `nitro.config.ts`.
+- **Auth is header-based**, not cookie-based — the client stores the session token in `localStorage` (`metrics_session_token`) and sends `Authorization: Bearer <token>` (or `x-session-token`) on every `/api/*` request. There are no cookies to set `secure: true` on. If cookies are introduced later, they must be `httpOnly; Secure` when `NODE_ENV === 'production'`.
 
 ## Project structure
 
