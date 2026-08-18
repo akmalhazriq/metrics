@@ -6,7 +6,7 @@ WORKDIR /app
 # Copy package files and install dependencies
 # Running npm install on Linux ensures the correct oxc-transform binaries are downloaded
 COPY package*.json ./
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 # Copy the rest of the code and build
 COPY . .
