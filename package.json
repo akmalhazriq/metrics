@@ -5,6 +5,9 @@
   "description": "AI-native BI platform — real PostgreSQL, conversational analytics, NL-to-SQL, anomaly detection",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
